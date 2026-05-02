@@ -8,10 +8,12 @@ from langchain_core.messages import AIMessage
 
 from tradingagents.agents.schemas import TraderProposal, render_trader_proposal
 from tradingagents.agents.utils.agent_utils import build_instrument_context
+from tradingagents.agents.utils.personas import get_persona, persona_system_preamble
 from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
 )
+from tradingagents.dataflows.config import get_config
 
 
 def create_trader(llm):
@@ -22,11 +24,15 @@ def create_trader(llm):
         instrument_context = build_instrument_context(company_name)
         investment_plan = state["investment_plan"]
 
+        persona = get_persona(get_config().get("trading_persona"))
+        persona_preamble = persona_system_preamble(persona)
+
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "You are a trading agent analyzing market data to make investment decisions. "
+                    persona_preamble
+                    + "You are a trading agent analyzing market data to make investment decisions. "
                     "Based on your analysis, provide a specific recommendation to buy, sell, or hold. "
                     "Anchor your reasoning in the analysts' reports and the research plan."
                 ),

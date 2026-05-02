@@ -220,6 +220,47 @@ print(decision)
 
 See `tradingagents/default_config.py` for all configuration options.
 
+## Investor / Economist Personas
+
+You can optionally filter the **final trading decision** through the worldview of a renowned investor or economist. When a persona is configured, its philosophy is prepended to the system prompt of the **Trader** (transaction proposal) and the **Portfolio Manager** (final approve/reject). Analysts and bull/bear debators stay neutral so tool calls and the adversarial debate aren't skewed.
+
+### How to enable
+
+Set `TRADINGAGENTS_PERSONA` in your `.env`:
+
+```bash
+TRADINGAGENTS_PERSONA=warren_buffett
+```
+
+…or in code:
+
+```python
+config = DEFAULT_CONFIG.copy()
+config["trading_persona"] = "cathie_wood"
+ta = TradingAgentsGraph(config=config)
+```
+
+Leave it blank or unset for neutral behavior (the default). Unknown names log a warning and the run continues with no persona — typos won't crash a long run.
+
+### Available personas
+
+| Style | Personas |
+| --- | --- |
+| **Value / Quality** | `warren_buffett`, `charlie_munger`, `ben_graham`, `mohnish_pabrai` |
+| **Growth / Innovation** | `cathie_wood`, `peter_lynch`, `phil_fisher` |
+| **Macro / Trader** | `stanley_druckenmiller`, `george_soros`, `ray_dalio` |
+| **Contrarian / Risk** | `michael_burry`, `nassim_taleb`, `bill_ackman` |
+| **Academic / Indexing** | `aswath_damodaran`, `john_bogle` |
+| **Indian markets** | `rakesh_jhunjhunwala` |
+
+Short aliases are accepted (`buffett`, `munger`, `graham`, `pabrai`, `wood`, `lynch`, `fisher`, `druck`, `soros`, `dalio`, `burry`, `ackman`, `taleb`, `damodaran`, `bogle`, `rakesh`). Lookup is case-insensitive and tolerant of spaces, hyphens, and underscores — `"Warren Buffett"`, `"warren-buffett"`, and `"warren_buffett"` all resolve to the same persona.
+
+### What changes
+
+The persona overlay is a **prompt prefix**, not a separate pipeline. The Trader and Portfolio Manager still see the same analyst reports, the same bull/bear debate, and the same risk debate — but they weigh that evidence through the persona's lens. For example, `warren_buffett` will downweight stories that depend on multiple expansion and demand a margin of safety; `cathie_wood` will lead with TAM and S-curve adoption and tolerate volatility; `nassim_taleb` will reject anything fragile and prefer convex payoffs.
+
+Personas do not change which analysts run, which tools are called, or which structured-output schema is used. They steer style and emphasis only. To add a new persona, edit `tradingagents/agents/utils/personas.py` and add a `Persona(...)` entry plus any aliases.
+
 ## Persistence and Recovery
 
 TradingAgents persists two kinds of state across runs.

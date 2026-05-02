@@ -31,6 +31,11 @@ DEFAULT_CONFIG = {
     # Output language for analyst reports and final decision
     # Internal agent debate stays in English for reasoning quality
     "output_language": "English",
+    # Optional investor/economist persona applied to the Trader and Portfolio
+    # Manager. None = no persona (today's neutral behavior). Set via the
+    # TRADINGAGENTS_PERSONA env var. See tradingagents/agents/utils/personas.py
+    # for the full registry.
+    "trading_persona": os.getenv("TRADINGAGENTS_PERSONA") or None,
     # Debate and discussion settings
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,

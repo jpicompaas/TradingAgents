@@ -15,10 +15,12 @@ from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
     get_language_instruction,
 )
+from tradingagents.agents.utils.personas import get_persona, persona_system_preamble
 from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
 )
+from tradingagents.dataflows.config import get_config
 
 
 def create_portfolio_manager(llm):
@@ -39,7 +41,10 @@ def create_portfolio_manager(llm):
             else ""
         )
 
-        prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
+        persona = get_persona(get_config().get("trading_persona"))
+        persona_preamble = persona_system_preamble(persona)
+
+        prompt = f"""{persona_preamble}As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
 
 {instrument_context}
 

@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [Unreleased]
+
+### Added
+
+- **Investor / economist persona overlay.** Configure
+  `TRADINGAGENTS_PERSONA` (or `config["trading_persona"]`) to filter the
+  Trader and Portfolio Manager through the worldview of a renowned
+  investor — `warren_buffett`, `charlie_munger`, `ben_graham`,
+  `mohnish_pabrai`, `cathie_wood`, `peter_lynch`, `phil_fisher`,
+  `stanley_druckenmiller`, `george_soros`, `ray_dalio`, `michael_burry`,
+  `bill_ackman`, `nassim_taleb`, `aswath_damodaran`, `john_bogle`, or
+  `rakesh_jhunjhunwala`. Short aliases supported. Analysts and the
+  bull/bear/risk debators stay neutral. Unknown names log a warning and
+  fall back to neutral.
+- **Groq provider.** OpenAI-compatible registration; `GROQ_API_KEY` env
+  picks it up. Recommended models: `llama-3.1-8b-instant` (quick) and
+  `llama-3.3-70b-versatile` (deep). Available in the interactive CLI's
+  provider selector.
+- **`TRADINGAGENTS_DISABLE_ANNOUNCEMENTS` env var.** Set to `1` to skip
+  the on-launch fetch from `api.tauric.ai`, restricting outbound traffic
+  to the chosen LLM provider and the configured market-data vendor.
+  Pre-set in `.env.example`.
+
 ## [0.2.4] — 2026-04-25
 
 ### Added

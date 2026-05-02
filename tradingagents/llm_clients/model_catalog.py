@@ -101,6 +101,22 @@ MODEL_OPTIONS: ProviderModeOptions = {
             ("Custom model ID", "custom"),
         ],
     },
+    "groq": {
+        "quick": [
+            ("Llama 3.1 8B Instant - Fastest, great for analysts/tool use", "llama-3.1-8b-instant"),
+            ("Llama 3.3 70B Versatile - Strong tool use, still fast", "llama-3.3-70b-versatile"),
+            ("Llama 4 Scout 17B (MoE) - Fast, modern Llama 4", "meta-llama/llama-4-scout-17b-16e-instruct"),
+            ("Gemma2 9B IT - Lightweight alternative", "gemma2-9b-it"),
+            ("Custom model ID", "custom"),
+        ],
+        "deep": [
+            ("Llama 3.3 70B Versatile - Best balance for managers", "llama-3.3-70b-versatile"),
+            ("Llama 4 Maverick 17B 128E (MoE) - Largest, strongest reasoning", "meta-llama/llama-4-maverick-17b-128e-instruct"),
+            ("Llama 4 Scout 17B (MoE) - Fast modern Llama 4", "meta-llama/llama-4-scout-17b-16e-instruct"),
+            ("DeepSeek R1 Distill Llama 70B - Reasoning (no tool_choice)", "deepseek-r1-distill-llama-70b"),
+            ("Custom model ID", "custom"),
+        ],
+    },
     # OpenRouter: fetched dynamically. Azure: any deployed model name.
     "ollama": {
         "quick": [
