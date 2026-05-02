@@ -104,6 +104,8 @@ MODEL_OPTIONS: ProviderModeOptions = {
     "groq": {
         "quick": [
             ("Llama 3.3 70B Versatile - Recommended, reliable tool calls", "llama-3.3-70b-versatile"),
+            ("GPT-OSS 20B (OpenAI open-weight) - Fast, strong tool use", "openai/gpt-oss-20b"),
+            ("GPT-OSS 120B (OpenAI open-weight) - Stronger reasoning", "openai/gpt-oss-120b"),
             ("Llama 4 Scout 17B (MoE) - Faster, modern Llama 4", "meta-llama/llama-4-scout-17b-16e-instruct"),
             ("Llama 3.1 8B Instant - Fastest but unreliable tool calls (NOT recommended)", "llama-3.1-8b-instant"),
             ("Gemma2 9B IT - Lightweight alternative", "gemma2-9b-it"),
@@ -111,6 +113,8 @@ MODEL_OPTIONS: ProviderModeOptions = {
         ],
         "deep": [
             ("Llama 3.3 70B Versatile - Best balance for managers", "llama-3.3-70b-versatile"),
+            ("GPT-OSS 120B (OpenAI open-weight) - Strong reasoning, recommended deep", "openai/gpt-oss-120b"),
+            ("GPT-OSS 20B (OpenAI open-weight) - Lighter alternative", "openai/gpt-oss-20b"),
             ("Llama 4 Maverick 17B 128E (MoE) - Largest, strongest reasoning", "meta-llama/llama-4-maverick-17b-128e-instruct"),
             ("Llama 4 Scout 17B (MoE) - Fast modern Llama 4", "meta-llama/llama-4-scout-17b-16e-instruct"),
             ("DeepSeek R1 Distill Llama 70B - Reasoning (no tool_choice)", "deepseek-r1-distill-llama-70b"),
