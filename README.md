@@ -175,6 +175,8 @@ Pick a different provider by setting its key — `.env.example` lists all of the
 Optional:
 - `ALPHA_VANTAGE_API_KEY` — alternative market-data vendor (default is `yfinance`, no key needed)
 - `TRADINGAGENTS_PERSONA` — investor/economist overlay (`buffett`, `dalio`, `cathie_wood`, `taleb`, …) applied to the Trader and Portfolio Manager
+- `TRADINGAGENTS_LLM_PROVIDER` — pin the provider (e.g. `groq`, `openai`, `anthropic`) and skip the picker step in the CLI. `LLM_PROVIDER` is also honored as a fallback.
+- `TRADINGAGENTS_OUTPUT_LANGUAGE` — pin the output language (e.g. `English`, `Spanish`, `中文`) and skip the picker step in the CLI.
 
 For enterprise providers (Azure OpenAI, AWS Bedrock), copy `.env.enterprise.example` to `.env.enterprise` and fill in credentials.
 

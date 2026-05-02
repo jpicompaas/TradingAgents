@@ -63,6 +63,8 @@ Other supported keys: `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `
 
 `TRADINGAGENTS_PERSONA` selects an investor/economist overlay (`buffett`, `dalio`, `soros`, `taleb`, `cathie_wood`, …). Surfaced in the CLI Progress panel title and at the top of `complete_report.md`.
 
+`TRADINGAGENTS_LLM_PROVIDER` (and `LLM_PROVIDER` as a fallback) and `TRADINGAGENTS_OUTPUT_LANGUAGE` skip the corresponding interactive picker steps. When set, the CLI logs `Step N: ... pinned via env → <value>` and proceeds.
+
 Runtime overrides:
 - `TRADINGAGENTS_RESULTS_DIR` — per-run JSON state and reports (default `~/.tradingagents/logs`).
 - `TRADINGAGENTS_CACHE_DIR` — base for checkpoint SQLite DBs (default `~/.tradingagents/cache`).

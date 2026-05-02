@@ -76,9 +76,14 @@ def save_run_bundle(
 ) -> Path:
     """Write a complete report bundle for a single run.
 
+    Folder name includes the active investor-persona key when one is set,
+    so it's easy to compare runs of the same ticker under different lenses
+    side-by-side: ``<TICKER>_<persona>_<timestamp>`` (or ``<TICKER>_<timestamp>``
+    if no persona overlay is active).
+
     Layout::
 
-        <root>/<TICKER>_<timestamp>/
+        <root>/<TICKER>_<persona>_<timestamp>/
             complete_report.md
             full_state.json
             1_analysts/{market,sentiment,news,fundamentals}.md
@@ -92,7 +97,13 @@ def save_run_bundle(
     root = Path(root) if root is not None else DEFAULT_REPORTS_ROOT
     if timestamp is None:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_path = root / f"{ticker}_{timestamp}"
+
+    persona = get_persona(get_config().get("trading_persona"))
+    persona_slug = persona.key if persona is not None else ""
+    folder = (
+        f"{ticker}_{persona_slug}_{timestamp}" if persona_slug else f"{ticker}_{timestamp}"
+    )
+    save_path = root / folder
     save_path.mkdir(parents=True, exist_ok=True)
 
     sections: list[str] = []

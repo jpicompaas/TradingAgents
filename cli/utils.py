@@ -228,28 +228,43 @@ def select_deep_thinking_agent(provider) -> str:
     """Select deep thinking llm engine using an interactive selection."""
     return _select_model(provider, "deep")
 
+# (display_name, provider_key, base_url) — single source of truth used by
+# both the interactive picker and env-pinned resolution.
+LLM_PROVIDERS: list[tuple[str, str, str | None]] = [
+    ("OpenAI", "openai", "https://api.openai.com/v1"),
+    ("Google", "google", None),
+    ("Anthropic", "anthropic", "https://api.anthropic.com/"),
+    ("xAI", "xai", "https://api.x.ai/v1"),
+    ("DeepSeek", "deepseek", "https://api.deepseek.com"),
+    ("Qwen", "qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+    ("GLM", "glm", "https://open.bigmodel.cn/api/paas/v4/"),
+    ("OpenRouter", "openrouter", "https://openrouter.ai/api/v1"),
+    ("Groq", "groq", "https://api.groq.com/openai/v1"),
+    ("Azure OpenAI", "azure", None),
+    ("Ollama", "ollama", "http://localhost:11434/v1"),
+]
+
+
+def resolve_llm_provider(key: str) -> tuple[str, str | None] | None:
+    """Look up a provider key from LLM_PROVIDERS. Returns (provider_key, base_url)
+    or None if the key isn't recognized.
+    """
+    needle = (key or "").strip().lower()
+    if not needle:
+        return None
+    for _, provider_key, url in LLM_PROVIDERS:
+        if provider_key == needle:
+            return provider_key, url
+    return None
+
+
 def select_llm_provider() -> tuple[str, str | None]:
     """Select the LLM provider and its API endpoint."""
-    # (display_name, provider_key, base_url)
-    PROVIDERS = [
-        ("OpenAI", "openai", "https://api.openai.com/v1"),
-        ("Google", "google", None),
-        ("Anthropic", "anthropic", "https://api.anthropic.com/"),
-        ("xAI", "xai", "https://api.x.ai/v1"),
-        ("DeepSeek", "deepseek", "https://api.deepseek.com"),
-        ("Qwen", "qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-        ("GLM", "glm", "https://open.bigmodel.cn/api/paas/v4/"),
-        ("OpenRouter", "openrouter", "https://openrouter.ai/api/v1"),
-        ("Groq", "groq", "https://api.groq.com/openai/v1"),
-        ("Azure OpenAI", "azure", None),
-        ("Ollama", "ollama", "http://localhost:11434/v1"),
-    ]
-
     choice = questionary.select(
         "Select your LLM Provider:",
         choices=[
             questionary.Choice(display, value=(provider_key, url))
-            for display, provider_key, url in PROVIDERS
+            for display, provider_key, url in LLM_PROVIDERS
         ],
         instruction="\n- Use arrow keys to navigate\n- Press Enter to select",
         style=questionary.Style(
@@ -260,7 +275,7 @@ def select_llm_provider() -> tuple[str, str | None]:
             ]
         ),
     ).ask()
-    
+
     if choice is None:
         console.print("\n[red]No LLM provider selected. Exiting...[/red]")
         exit(1)

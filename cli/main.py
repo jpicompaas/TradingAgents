@@ -534,14 +534,22 @@ def get_user_selections():
     )
     analysis_date = get_analysis_date()
 
-    # Step 3: Output language
-    console.print(
-        create_question_box(
-            "Step 3: Output Language",
-            "Select the language for analyst reports and final decision"
+    # Step 3: Output language — skipped if pinned via env.
+    import os as _os
+    env_lang = (_os.getenv("TRADINGAGENTS_OUTPUT_LANGUAGE") or "").strip()
+    if env_lang:
+        output_language = env_lang
+        console.print(
+            f"[dim]Step 3: Output Language pinned via TRADINGAGENTS_OUTPUT_LANGUAGE → {output_language}[/dim]"
         )
-    )
-    output_language = ask_output_language()
+    else:
+        console.print(
+            create_question_box(
+                "Step 3: Output Language",
+                "Select the language for analyst reports and final decision",
+            )
+        )
+        output_language = ask_output_language()
 
     # Step 4: Select analysts
     console.print(
@@ -562,13 +570,36 @@ def get_user_selections():
     )
     selected_research_depth = select_research_depth()
 
-    # Step 6: LLM Provider
-    console.print(
-        create_question_box(
-            "Step 6: LLM Provider", "Select your LLM provider"
+    # Step 6: LLM Provider — skipped if pinned via env.
+    # Honors TRADINGAGENTS_LLM_PROVIDER first, then LLM_PROVIDER (already used
+    # by docker-compose's tradingagents-ollama service).
+    env_provider = (
+        _os.getenv("TRADINGAGENTS_LLM_PROVIDER")
+        or _os.getenv("LLM_PROVIDER")
+        or ""
+    ).strip()
+    if env_provider:
+        from cli.utils import resolve_llm_provider
+        resolved = resolve_llm_provider(env_provider)
+        if resolved is None:
+            console.print(
+                f"[red]Unknown TRADINGAGENTS_LLM_PROVIDER: {env_provider!r}. "
+                f"Falling back to interactive selection.[/red]"
+            )
+            console.print(
+                create_question_box("Step 6: LLM Provider", "Select your LLM provider")
+            )
+            selected_llm_provider, backend_url = select_llm_provider()
+        else:
+            selected_llm_provider, backend_url = resolved
+            console.print(
+                f"[dim]Step 6: LLM Provider pinned via env → {selected_llm_provider}[/dim]"
+            )
+    else:
+        console.print(
+            create_question_box("Step 6: LLM Provider", "Select your LLM provider")
         )
-    )
-    selected_llm_provider, backend_url = select_llm_provider()
+        selected_llm_provider, backend_url = select_llm_provider()
 
     # Step 7: Thinking agents
     console.print(
