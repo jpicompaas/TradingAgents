@@ -148,11 +148,15 @@ _KEY_METRIC_METHODS = frozenset({
     "get_income_statement",
 })
 
-# Per-call retry budget. Key metrics get more attempts because a missing
-# data point cascades into "no clear trend" placeholder reasoning.
-_RETRIES_KEY = 5
-_RETRIES_OTHER = 2
-_BASE_DELAY = 1.0  # seconds; doubled each attempt
+# Per-call retry budget. Bounded conservatively so a flaky upstream
+# cannot stall the analyst graph for minutes — total max wall time per
+# vendor is roughly base_delay * (2**max_retries - 1) seconds.
+# Key-metric calls get one extra try; other calls fail over faster.
+# yfinance has its own internal retry layer (yf_retry) on top of this,
+# so the effective budget is layered.
+_RETRIES_KEY = 2     # ≤ 1.5s extra per vendor
+_RETRIES_OTHER = 1   # ≤ 0.5s extra per vendor
+_BASE_DELAY = 0.5    # seconds; doubled each attempt
 
 
 def _is_transient_data_error(exc: Exception) -> bool:

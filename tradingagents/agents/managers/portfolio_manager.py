@@ -73,15 +73,23 @@ new synthesis or judgment, not a recap. If you have nothing concrete to add to
 a section, say less. Empty is better than filler — every sentence must add a
 signal a reader cannot get from the source material.
 
-**Price levels — populate the `levels` field with pre-earnings estimates** valid
-only until the next scheduled earnings event:
-- `next_earnings_date` (ISO YYYY-MM-DD if known)
-- `accumulate_below`: add-to-position dip-buy zone
-- `hold_zone_low` / `hold_zone_high`: no-action range
-- `trim_above`: take-profit level
-- `exit_below`: stop / thesis-broken level
+**Price levels — populate the `levels` field** with two complementary pieces:
 
-Anchor each level in something specific (technical level, prior support,
+1. **State-change thresholds** valid only until next earnings:
+   - `next_earnings_date` (ISO YYYY-MM-DD if known)
+   - `accumulate_below`: add-to-position dip-buy zone
+   - `hold_zone_low` / `hold_zone_high`: no-action range
+   - `trim_above`: take-profit level
+   - `exit_below`: stop / thesis-broken level
+
+2. **Forward price estimates** at +30, +60, and +90 calendar days from the
+   analysis date (`estimate_30d`, `estimate_60d`, `estimate_90d`). For each
+   horizon, give a low / expected / high range anchored in current price,
+   base-rate volatility, and known catalysts. The +60d horizon typically
+   spans the next earnings print — reflect that uncertainty in the range.
+   If you only have a point estimate, populate just `expected`.
+
+Anchor every number in something specific (technical level, prior support,
 valuation floor, post-event reaction). **Leave any field unset if you cannot
 defend it** — inventing numbers to fill the schema is worse than omitting them.
 

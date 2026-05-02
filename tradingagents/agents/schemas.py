@@ -58,23 +58,49 @@ class TraderAction(str, Enum):
     """
 
 
+class HorizonEstimate(BaseModel):
+    """Point/range price estimate over a fixed time horizon.
+
+    All fields optional. If the model only has a single point estimate,
+    populate ``expected``. If it has a low/high range as well, populate
+    those. Inventing values to fill the schema is worse than omitting.
+    """
+
+    low: Optional[float] = Field(
+        default=None,
+        description="Bearish-scenario price for this horizon; conservative downside.",
+    )
+    expected: Optional[float] = Field(
+        default=None,
+        description="Most-likely price at the end of this horizon.",
+    )
+    high: Optional[float] = Field(
+        default=None,
+        description="Bullish-scenario price for this horizon; reasonable upside.",
+    )
+
+
 class LevelEstimates(BaseModel):
-    """Pre-earnings price levels at which the thesis changes state.
+    """Pre-earnings price levels and forward price estimates.
 
-    All numeric fields are in the instrument's quote currency. **Every field
-    is optional** — leave it None if you do not have a defensible basis from
-    the analyst reports. Inventing numbers to fill the schema is worse than
-    omitting them.
+    Two purposes in one block:
 
-    These estimates are explicitly valid only until ``next_earnings_date``;
-    a fresh earnings print is expected to reset the levels.
+    1. **Levels at which the thesis changes state** (accumulate / hold / trim
+       / exit), valid only until ``next_earnings_date``.
+    2. **Forward price estimates** at 30, 60, and 90 days from the analysis
+       date — anchor the thesis to concrete numbers a reader can track.
+
+    All fields are optional. **Leave any field unset** if you do not have a
+    defensible basis from the analyst reports — inventing numbers is worse
+    than omitting them.
     """
 
     next_earnings_date: Optional[str] = Field(
         default=None,
         description=(
             "ISO date (YYYY-MM-DD) of the next scheduled earnings event, if "
-            "known from the analyst reports. These levels expire on this date."
+            "known from the analyst reports. State-change levels below expire "
+            "on this date."
         ),
     )
     accumulate_below: Optional[float] = Field(
@@ -101,11 +127,55 @@ class LevelEstimates(BaseModel):
         ),
     )
 
+    estimate_30d: Optional[HorizonEstimate] = Field(
+        default=None,
+        description=(
+            "Forward price estimate ~30 calendar days from the analysis "
+            "date (low / expected / high). Anchor in current technical setup, "
+            "near-term catalysts, and base-rate volatility."
+        ),
+    )
+    estimate_60d: Optional[HorizonEstimate] = Field(
+        default=None,
+        description=(
+            "Forward price estimate ~60 calendar days from the analysis date. "
+            "Typically spans the next earnings window — reflect that in the range."
+        ),
+    )
+    estimate_90d: Optional[HorizonEstimate] = Field(
+        default=None,
+        description=(
+            "Forward price estimate ~90 calendar days from the analysis date. "
+            "Reflects the post-earnings reaction band."
+        ),
+    )
+
 
 def _format_level(prefix: str, value: Optional[float]) -> Optional[str]:
     if value is None:
         return None
     return f"{prefix}{value:g}"
+
+
+def _format_horizon(label: str, est: Optional[HorizonEstimate]) -> Optional[str]:
+    """One bullet line for a single horizon, e.g. '+30d: 280 (range 260–305)'.
+
+    Omits parts that are unset; returns None if nothing useful to show.
+    """
+    if est is None:
+        return None
+    parts: list[str] = []
+    if est.expected is not None:
+        parts.append(f"{est.expected:g}")
+    if est.low is not None and est.high is not None:
+        parts.append(f"range {est.low:g}–{est.high:g}")
+    elif est.low is not None:
+        parts.append(f"low {est.low:g}")
+    elif est.high is not None:
+        parts.append(f"high {est.high:g}")
+    if not parts:
+        return None
+    return f"{label}: " + " (".join(parts) + (")" if len(parts) > 1 else "")
 
 
 def render_level_estimates(levels: Optional[LevelEstimates]) -> str:
@@ -116,7 +186,9 @@ def render_level_estimates(levels: Optional[LevelEstimates]) -> str:
     """
     if levels is None:
         return ""
-    lines = []
+    lines: list[str] = []
+
+    # State-change levels (valid until earnings)
     if levels.accumulate_below is not None:
         lines.append(_format_level("Accumulate below ", levels.accumulate_below))
     if levels.hold_zone_low is not None and levels.hold_zone_high is not None:
@@ -130,19 +202,31 @@ def render_level_estimates(levels: Optional[LevelEstimates]) -> str:
     if levels.exit_below is not None:
         lines.append(_format_level("Exit below ", levels.exit_below))
 
-    if not lines:
+    horizon_lines: list[str] = []
+    for label, est in (
+        ("+30d", levels.estimate_30d),
+        ("+60d", levels.estimate_60d),
+        ("+90d", levels.estimate_90d),
+    ):
+        line = _format_horizon(label, est)
+        if line:
+            horizon_lines.append(line)
+
+    if not lines and not horizon_lines:
         return ""
 
-    horizon = (
-        f" (valid until next earnings: {levels.next_earnings_date})"
-        if levels.next_earnings_date
-        else " (valid until next earnings)"
-    )
-    return "**Levels**" + horizon + ":\n- " + "\n- ".join(lines)
+    blocks: list[str] = []
+    if lines:
+        suffix = (
+            f" (valid until next earnings: {levels.next_earnings_date})"
+            if levels.next_earnings_date
+            else " (valid until next earnings)"
+        )
+        blocks.append("**Levels**" + suffix + ":\n- " + "\n- ".join(lines))
+    if horizon_lines:
+        blocks.append("**Forward price estimates**:\n- " + "\n- ".join(horizon_lines))
 
-    BUY = "Buy"
-    HOLD = "Hold"
-    SELL = "Sell"
+    return "\n\n".join(blocks)
 
 
 # ---------------------------------------------------------------------------

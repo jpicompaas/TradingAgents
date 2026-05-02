@@ -24,7 +24,7 @@ config["data_vendors"] = {
     "news_data": "yfinance",                 # Options: alpha_vantage, yfinance
 }
 
-TICKER = "TWLO"
+TICKER = "NVDA"
 TRADE_DATE = "2026-05-02"
 
 # Initialize with custom config

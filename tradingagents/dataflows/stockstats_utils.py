@@ -13,8 +13,13 @@ from .utils import safe_ticker_component
 logger = logging.getLogger(__name__)
 
 
-def yf_retry(func, max_retries=6, base_delay=1.5):
+def yf_retry(func, max_retries=3, base_delay=0.75):
     """Execute a yfinance call with exponential backoff on transient errors.
+
+    Total worst-case wall time is bounded so a flaky upstream cannot stall
+    the analyst graph for minutes: 3 retries with base 0.75s doubling →
+    delays of 0.75s, 1.5s, 3s; ≤ ~5.5s including the call itself. After
+    that, the route_to_vendor layer fails over to the next vendor.
 
     Retries on:
     - YFRateLimitError (429)
