@@ -35,11 +35,18 @@ def get_language_instruction() -> str:
 
 
 def build_instrument_context(ticker: str) -> str:
-    """Describe the exact instrument so agents preserve exchange-qualified tickers."""
+    """Describe the exact instrument so agents pass tickers through verbatim.
+
+    The wording is deliberately strict: weaker models otherwise read example
+    suffixes as a menu and append one (e.g. turning `TWLO` into `TWLO.TW`).
+    """
     return (
-        f"The instrument to analyze is `{ticker}`. "
-        "Use this exact ticker in every tool call, report, and recommendation, "
-        "preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`)."
+        f"The instrument to analyze is exactly `{ticker}`. "
+        "Pass this ticker character-for-character into every tool call, report, "
+        "and recommendation — do not modify it in any way. "
+        "Do NOT add an exchange suffix that is not already in the ticker. "
+        "Do NOT remove a suffix that is already in the ticker. "
+        "If the ticker has no dot, the tool call must have no dot."
     )
 
 def create_msg_delete():

@@ -1,16 +1,20 @@
-from tradingagents.graph.trading_graph import TradingAgentsGraph
-from tradingagents.default_config import DEFAULT_CONFIG
-
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load .env BEFORE importing default_config — DEFAULT_CONFIG reads
+# os.getenv("TRADINGAGENTS_PERSONA") at import time, so the load order
+# matters. With .env loaded first, the persona overlay actually takes effect.
 load_dotenv()
 
-# Create a custom config
+from tradingagents.graph.trading_graph import TradingAgentsGraph  # noqa: E402
+from tradingagents.default_config import DEFAULT_CONFIG  # noqa: E402
+from tradingagents.reports import save_run_bundle  # noqa: E402
+
+# Create a custom config (defaults to Groq via DEFAULT_CONFIG)
 config = DEFAULT_CONFIG.copy()
-config["deep_think_llm"] = "gpt-5.4-mini"  # Use a different model
-config["quick_think_llm"] = "gpt-5.4-mini"  # Use a different model
-config["max_debate_rounds"] = 1  # Increase debate rounds
+config["llm_provider"] = "groq"
+config["deep_think_llm"] = "llama-3.3-70b-versatile"
+config["quick_think_llm"] = "llama-3.3-70b-versatile"
+config["max_debate_rounds"] = 1
 
 # Configure data vendors (default uses yfinance, no extra API keys needed)
 config["data_vendors"] = {
@@ -20,12 +24,16 @@ config["data_vendors"] = {
     "news_data": "yfinance",                 # Options: alpha_vantage, yfinance
 }
 
+TICKER = "TWLO"
+TRADE_DATE = "2026-05-02"
+
 # Initialize with custom config
-ta = TradingAgentsGraph(debug=True, config=config)
+ta = TradingAgentsGraph(debug=False, config=config)
 
 # forward propagate
-_, decision = ta.propagate("NVDA", "2024-05-10")
-print(decision)
+final_state, decision = ta.propagate(TICKER, TRADE_DATE)
 
-# Memorize mistakes and reflect
-# ta.reflect_and_remember(1000) # parameter is the position returns
+# Auto-save full bundle (analysts + research + trading + risk + portfolio + raw state)
+bundle_dir = save_run_bundle(final_state, TICKER)
+print(f"\nReport saved to: {bundle_dir.resolve()}")
+print(f"\n--- Final Decision ---\n{decision}")

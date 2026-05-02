@@ -103,9 +103,9 @@ MODEL_OPTIONS: ProviderModeOptions = {
     },
     "groq": {
         "quick": [
-            ("Llama 3.1 8B Instant - Fastest, great for analysts/tool use", "llama-3.1-8b-instant"),
-            ("Llama 3.3 70B Versatile - Strong tool use, still fast", "llama-3.3-70b-versatile"),
-            ("Llama 4 Scout 17B (MoE) - Fast, modern Llama 4", "meta-llama/llama-4-scout-17b-16e-instruct"),
+            ("Llama 3.3 70B Versatile - Recommended, reliable tool calls", "llama-3.3-70b-versatile"),
+            ("Llama 4 Scout 17B (MoE) - Faster, modern Llama 4", "meta-llama/llama-4-scout-17b-16e-instruct"),
+            ("Llama 3.1 8B Instant - Fastest but unreliable tool calls (NOT recommended)", "llama-3.1-8b-instant"),
             ("Gemma2 9B IT - Lightweight alternative", "gemma2-9b-it"),
             ("Custom model ID", "custom"),
         ],

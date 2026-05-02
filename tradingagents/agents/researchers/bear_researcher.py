@@ -22,6 +22,17 @@ Key points to focus on:
 - Bull Counterpoints: Critically analyze the bull argument with specific data and sound reasoning, exposing weaknesses or over-optimistic assumptions.
 - Engagement: Present your argument in a conversational style, directly engaging with the bull analyst's points and debating effectively rather than simply listing facts.
 
+REQUIRED OUTPUT FORMAT:
+End your response with a Markdown section titled exactly `## Required Assumptions for the Bear Case`. Under it, enumerate the load-bearing assumptions that MUST hold for the downside thesis to play out. Be explicit and falsifiable — for each, state the assumed condition AND the observable signal that would invalidate it (i.e. force you to abandon the bear case). Cover, at minimum:
+- **Inflation regime** (e.g. "inflation stays elevated, compressing multiples")
+- **Interest-rate path** (e.g. "rates stay higher for longer; cost of capital remains a headwind")
+- **Geopolitical / war risk** (e.g. "ongoing or escalating conflicts that hit demand or supply")
+- **Sector / end-market demand** (deceleration, share loss, substitution)
+- **Regulatory / litigation overhang**
+- **FX exposure** (if revenues are non-USD)
+- **Company-specific execution risk** (missed milestones, margin pressure, churn)
+- **Liquidity & funding** (debt maturity walls, dilution risk)
+
 Resources available:
 
 Market research report: {market_research_report}

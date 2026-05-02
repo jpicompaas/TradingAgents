@@ -1,4 +1,6 @@
+import logging
 import os
+import time
 from typing import Any, Optional
 
 from langchain_core.messages import AIMessage
@@ -6,6 +8,8 @@ from langchain_openai import ChatOpenAI
 
 from .base_client import BaseLLMClient, normalize_content
 from .validators import validate_model
+
+logger = logging.getLogger(__name__)
 
 
 class NormalizedChatOpenAI(ChatOpenAI):
@@ -103,6 +107,59 @@ class DeepSeekChatOpenAI(NormalizedChatOpenAI):
             )
         return super().with_structured_output(schema, method=method, **kwargs)
 
+
+def _is_groq_tool_use_failed(exc: Exception) -> bool:
+    """Detect Groq's `tool_use_failed` 400 error.
+
+    Groq's Llama models intermittently emit tool calls in the legacy
+    `<function=name>{json}</function>` text format instead of the OpenAI
+    `tool_calls` JSON, and Groq rejects this with HTTP 400 / code
+    'tool_use_failed'. The failure is non-deterministic — a plain retry
+    almost always succeeds.
+    """
+    body = getattr(exc, "body", None) or {}
+    if isinstance(body, dict):
+        err = body.get("error") or {}
+        if isinstance(err, dict) and err.get("code") == "tool_use_failed":
+            return True
+    # Fallback: inspect message text. The SDK sometimes surfaces the body
+    # only in the stringified message.
+    return "tool_use_failed" in str(exc)
+
+
+class GroqChatOpenAI(NormalizedChatOpenAI):
+    """Groq-specific ChatOpenAI with retry on `tool_use_failed`.
+
+    Groq's Llama models occasionally produce malformed tool calls (legacy
+    `<function=...>` syntax). Groq rejects these with a 400; retrying
+    almost always fixes it because the failure is sampling-noise, not a
+    persistent prompt issue. We retry a few times with brief backoff
+    before letting the error propagate.
+    """
+
+    _GROQ_TOOL_USE_RETRIES = 3
+    _GROQ_TOOL_USE_BACKOFF = 0.5  # seconds, doubled each attempt
+
+    def invoke(self, input, config=None, **kwargs):
+        delay = self._GROQ_TOOL_USE_BACKOFF
+        for attempt in range(self._GROQ_TOOL_USE_RETRIES + 1):
+            try:
+                return normalize_content(
+                    ChatOpenAI.invoke(self, input, config, **kwargs)
+                )
+            except Exception as exc:
+                if attempt < self._GROQ_TOOL_USE_RETRIES and _is_groq_tool_use_failed(exc):
+                    logger.warning(
+                        "Groq tool_use_failed (attempt %d/%d); retrying in %.1fs",
+                        attempt + 1,
+                        self._GROQ_TOOL_USE_RETRIES,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                raise
+
 # Kwargs forwarded from user config to ChatOpenAI
 _PASSTHROUGH_KWARGS = (
     "timeout", "max_retries", "reasoning_effort",
@@ -170,9 +227,14 @@ class OpenAIClient(BaseLLMClient):
         if self.provider == "openai":
             llm_kwargs["use_responses_api"] = True
 
-        # DeepSeek's thinking-mode quirks live in their own subclass so the
-        # base NormalizedChatOpenAI stays free of provider-specific branches.
-        chat_cls = DeepSeekChatOpenAI if self.provider == "deepseek" else NormalizedChatOpenAI
+        # Provider-specific quirks live in their own subclasses so the base
+        # NormalizedChatOpenAI stays free of provider-specific branches.
+        if self.provider == "deepseek":
+            chat_cls = DeepSeekChatOpenAI
+        elif self.provider == "groq":
+            chat_cls = GroqChatOpenAI
+        else:
+            chat_cls = NormalizedChatOpenAI
         return chat_cls(**llm_kwargs)
 
     def validate_model(self) -> bool:

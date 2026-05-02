@@ -12,9 +12,13 @@ DEFAULT_CONFIG = {
     # Pending entries are never pruned. None disables rotation entirely.
     "memory_log_max_entries": None,
     # LLM settings
-    "llm_provider": "openai",
-    "deep_think_llm": "gpt-5.4",
-    "quick_think_llm": "gpt-5.4-mini",
+    "llm_provider": "groq",
+    # Llama 3.3 70B handles tool calls reliably on Groq. The 8B Instant model
+    # is faster but intermittently emits Groq's `tool_use_failed` (it produces
+    # the legacy Llama `<function=...>` syntax instead of the OpenAI tool
+    # schema Groq expects), which crashes analyst nodes mid-run.
+    "deep_think_llm": "llama-3.3-70b-versatile",
+    "quick_think_llm": "llama-3.3-70b-versatile",
     # When None, each provider's client falls back to its own default endpoint
     # (api.openai.com for OpenAI, generativelanguage.googleapis.com for Gemini, ...).
     # The CLI overrides this per provider when the user picks one. Keeping a

@@ -27,5 +27,19 @@ def get_config() -> Dict:
     return _config.copy()
 
 
+def canonical_ticker(llm_supplied: str) -> str:
+    """Return the user-entered ticker, ignoring whatever the LLM hallucinated.
+
+    LLMs (especially smaller ones like llama-3.1-8b-instant) frequently invent
+    exchange suffixes (`TWLO` -> `TWLO.TO`/`TWLO.TW`). The user already told us
+    the exact ticker via the CLI/propagate(); trust that, not the model.
+
+    Falls back to the LLM-supplied value if no canonical ticker is set
+    (e.g. when tools are exercised outside a propagate() flow).
+    """
+    pinned = (get_config().get("company_of_interest") or "").strip()
+    return pinned or (llm_supplied or "").strip()
+
+
 # Initialize with default config
 initialize_config()

@@ -153,38 +153,29 @@ class TradingAgentsGraph:
         return kwargs
 
     def _create_tool_nodes(self) -> Dict[str, ToolNode]:
-        """Create tool nodes for different data sources using abstract methods."""
+        """Create tool nodes for different data sources using abstract methods.
+
+        ``handle_tool_errors=True`` converts tool exceptions into ToolMessages
+        so the analyst can continue (or pick a different tool) instead of
+        crashing the whole graph on a single failed call (e.g. yfinance 404,
+        a transient network blip, or an LLM-malformed argument).
+        """
         return {
             "market": ToolNode(
-                [
-                    # Core stock data tools
-                    get_stock_data,
-                    # Technical indicators
-                    get_indicators,
-                ]
+                [get_stock_data, get_indicators],
+                handle_tool_errors=True,
             ),
             "social": ToolNode(
-                [
-                    # News tools for social media analysis
-                    get_news,
-                ]
+                [get_news],
+                handle_tool_errors=True,
             ),
             "news": ToolNode(
-                [
-                    # News and insider information
-                    get_news,
-                    get_global_news,
-                    get_insider_transactions,
-                ]
+                [get_news, get_global_news, get_insider_transactions],
+                handle_tool_errors=True,
             ),
             "fundamentals": ToolNode(
-                [
-                    # Fundamental analysis tools
-                    get_fundamentals,
-                    get_balance_sheet,
-                    get_cashflow,
-                    get_income_statement,
-                ]
+                [get_fundamentals, get_balance_sheet, get_cashflow, get_income_statement],
+                handle_tool_errors=True,
             ),
         }
 
@@ -270,6 +261,10 @@ class TradingAgentsGraph:
         successful node on a subsequent invocation with the same ticker+date.
         """
         self.ticker = company_name
+
+        # Pin the canonical ticker into dataflow config so tools can override
+        # whatever ticker the LLM hallucinates in tool-call args.
+        set_config({"company_of_interest": company_name})
 
         # Resolve any pending memory-log entries for this ticker before the pipeline runs.
         self._resolve_pending_entries(company_name)

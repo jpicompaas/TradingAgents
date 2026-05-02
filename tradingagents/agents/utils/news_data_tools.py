@@ -1,5 +1,6 @@
 from langchain_core.tools import tool
 from typing import Annotated
+from tradingagents.dataflows.config import canonical_ticker
 from tradingagents.dataflows.interface import route_to_vendor
 
 @tool
@@ -18,7 +19,7 @@ def get_news(
     Returns:
         str: A formatted string containing news data
     """
-    return route_to_vendor("get_news", ticker, start_date, end_date)
+    return route_to_vendor("get_news", canonical_ticker(ticker), start_date, end_date)
 
 @tool
 def get_global_news(
@@ -50,4 +51,4 @@ def get_insider_transactions(
     Returns:
         str: A report of insider transaction data
     """
-    return route_to_vendor("get_insider_transactions", ticker)
+    return route_to_vendor("get_insider_transactions", canonical_ticker(ticker))

@@ -100,37 +100,53 @@ Our framework decomposes complex trading tasks into specialized roles. This ensu
 
 ## Installation and CLI
 
-### Installation
+TradingAgents runs in Docker — no Python toolchain or `pip install` on the host.
 
-Clone TradingAgents:
+### 1. Clone
+
 ```bash
 git clone https://github.com/TauricResearch/TradingAgents.git
 cd TradingAgents
 ```
 
-Create a virtual environment in any of your favorite environment managers:
+### 2. Configure API keys
+
 ```bash
-conda create -n tradingagents python=3.13
-conda activate tradingagents
+cp .env.example .env   # then edit .env and fill in keys for the providers you'll use
 ```
 
-Install the package and its dependencies:
+### 3. Run the CLI
+
 ```bash
-pip install .
+docker compose run --rm tradingagents                          # interactive CLI
+docker compose run --rm tradingagents analyze --checkpoint     # enable LangGraph resume
+docker compose run --rm tradingagents analyze --clear-checkpoints   # wipe per-ticker checkpoint DBs
 ```
 
-### Docker
+The first invocation builds the image; subsequent runs reuse it. Run `docker compose build tradingagents` to force a rebuild after pulling code changes. Per-run state (`~/.tradingagents/...`) is persisted across runs in the `tradingagents_data` named volume.
 
-Alternatively, run with Docker:
-```bash
-cp .env.example .env  # add your API keys
-docker compose run --rm tradingagents
-```
+### Local models with Ollama
 
-For local models with Ollama:
 ```bash
 docker compose --profile ollama run --rm tradingagents-ollama
 ```
+
+### Programmatic / `main.py` example
+
+The Dockerfile's entrypoint is the CLI, so override it to run a script:
+
+```bash
+docker compose run --rm --entrypoint python tradingagents main.py
+```
+
+### Developing without Docker (optional)
+
+Contributors who prefer a host install can still:
+```bash
+pip install .
+tradingagents
+```
+This is not required to use the framework.
 
 ### Required APIs
 
@@ -161,8 +177,8 @@ cp .env.example .env
 
 Launch the interactive CLI:
 ```bash
-tradingagents          # installed command
-python -m cli.main     # alternative: run directly from source
+docker compose run --rm tradingagents             # canonical path
+tradingagents                                     # only if you also did the optional host install
 ```
 You will see a screen where you can select your desired tickers, analysis date, LLM provider, research depth, and more.
 

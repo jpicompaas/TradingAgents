@@ -81,6 +81,9 @@ class MessageBuffer:
         self.report_sections = {}
         self.selected_analysts = []
         self._processed_message_ids = set()
+        # Active investor-persona label (e.g. "Ray Dalio") shown in header
+        # and Progress panel title. Empty string = neutral / no persona.
+        self.persona_label = ""
 
     def init_for_analysis(self, selected_analysts):
         """Initialize agent status and report sections based on selected analysts.
@@ -254,11 +257,17 @@ def format_tokens(n):
 
 
 def update_display(layout, spinner_text=None, stats_handler=None, start_time=None):
-    # Header with welcome message
+    # Header — surfaces the active investor-persona overlay so the user can
+    # see at a glance which strategy is steering the Trader/Portfolio Manager.
+    persona_line = (
+        f"[bold yellow]Strategy / Persona:[/bold yellow] {message_buffer.persona_label}"
+        if message_buffer.persona_label
+        else "[dim]Strategy / Persona: none (neutral)[/dim]"
+    )
     layout["header"].update(
         Panel(
-            "[bold green]Welcome to TradingAgents CLI[/bold green]\n"
-            "[dim]© [Tauric Research](https://github.com/TauricResearch)[/dim]",
+            "[bold green]Welcome to TradingAgents CLI[/bold green]   "
+            + persona_line,
             title="Welcome to TradingAgents",
             border_style="green",
             padding=(1, 2),
@@ -339,8 +348,13 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
         # Add horizontal line after each team
         progress_table.add_row("─" * 20, "─" * 20, "─" * 20, style="dim")
 
+    progress_title = (
+        f"Progress · Persona: {message_buffer.persona_label}"
+        if message_buffer.persona_label
+        else "Progress"
+    )
     layout["progress"].update(
-        Panel(progress_table, title="Progress", border_style="cyan", padding=(1, 2))
+        Panel(progress_table, title=progress_title, border_style="cyan", padding=(1, 2))
     )
 
     # Messages panel showing recent messages and tool calls
@@ -963,6 +977,11 @@ def run_analysis(checkpoint: bool = False):
     # Initialize message buffer with selected analysts
     message_buffer.init_for_analysis(selected_analyst_keys)
 
+    # Resolve persona label (display name) for header + progress panel.
+    from tradingagents.agents.utils.personas import get_persona
+    _persona = get_persona(config.get("trading_persona"))
+    message_buffer.persona_label = _persona.display_name if _persona else ""
+
     # Track start time for elapsed display
     start_time = time.time()
 
@@ -1171,30 +1190,18 @@ def run_analysis(checkpoint: bool = False):
 
         update_display(layout, stats_handler=stats_handler, start_time=start_time)
 
-    # Post-analysis prompts (outside Live context for clean interaction)
+    # Post-analysis (no prompts — auto-save to ./trading-reports/<TICKER>_<ts>/)
     console.print("\n[bold cyan]Analysis Complete![/bold cyan]\n")
 
-    # Prompt to save report
-    save_choice = typer.prompt("Save report?", default="Y").strip().upper()
-    if save_choice in ("Y", "YES", ""):
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_path = Path.cwd() / "reports" / f"{selections['ticker']}_{timestamp}"
-        save_path_str = typer.prompt(
-            "Save path (press Enter for default)",
-            default=str(default_path)
-        ).strip()
-        save_path = Path(save_path_str)
-        try:
-            report_file = save_report_to_disk(final_state, selections["ticker"], save_path)
-            console.print(f"\n[green]✓ Report saved to:[/green] {save_path.resolve()}")
-            console.print(f"  [dim]Complete report:[/dim] {report_file.name}")
-        except Exception as e:
-            console.print(f"[red]Error saving report: {e}[/red]")
+    from tradingagents.reports import save_run_bundle, DEFAULT_REPORTS_ROOT
+    try:
+        bundle_dir = save_run_bundle(final_state, selections["ticker"])
+        console.print(f"[green]✓ Report saved to:[/green] {bundle_dir.resolve()}")
+        console.print(f"  [dim]Open:[/dim] {bundle_dir / 'complete_report.md'}")
+    except Exception as e:
+        console.print(f"[red]Error saving report: {e}[/red]")
 
-    # Prompt to display full report
-    display_choice = typer.prompt("\nDisplay full report on screen?", default="Y").strip().upper()
-    if display_choice in ("Y", "YES", ""):
-        display_complete_report(final_state)
+    display_complete_report(final_state)
 
 
 @app.command()

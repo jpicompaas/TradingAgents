@@ -9,14 +9,24 @@ TradingAgents is a multi-agent LLM financial trading framework built on **LangGr
 ## Commands
 
 ### Install / run
+
+Docker is the canonical path — no host `pip install` required.
+
 ```bash
-pip install .                                  # install package + CLI
+cp .env.example .env                                                # one-time: fill in provider keys
+docker compose run --rm tradingagents                               # interactive CLI
+docker compose run --rm tradingagents analyze --checkpoint          # enable LangGraph resume
+docker compose run --rm tradingagents analyze --clear-checkpoints   # wipe all per-ticker checkpoint DBs
+docker compose run --rm --entrypoint python tradingagents main.py   # programmatic example (NVDA, hard-coded date)
+docker compose --profile ollama run --rm tradingagents-ollama       # local-models variant
+docker compose build tradingagents                                  # rebuild image after code changes
+```
+
+Optional host install (development only — not required to use the framework):
+```bash
+pip install .                                  # installs package + `tradingagents` CLI
 tradingagents                                  # interactive CLI (alias for cli.main:app)
-tradingagents analyze --checkpoint             # enable LangGraph resume
-tradingagents analyze --clear-checkpoints      # wipe all per-ticker checkpoint DBs
-python main.py                                 # programmatic example (NVDA, hard-coded date)
-docker compose run --rm tradingagents          # containerized run (reads .env)
-docker compose --profile ollama run --rm tradingagents-ollama   # local-models variant
+python main.py                                 # programmatic example
 ```
 
 ### Tests

@@ -13,23 +13,60 @@ from .utils import safe_ticker_component
 logger = logging.getLogger(__name__)
 
 
-def yf_retry(func, max_retries=3, base_delay=2.0):
-    """Execute a yfinance call with exponential backoff on rate limits.
+def yf_retry(func, max_retries=6, base_delay=1.5):
+    """Execute a yfinance call with exponential backoff on transient errors.
 
-    yfinance raises YFRateLimitError on HTTP 429 responses but does not
-    retry them internally. This wrapper adds retry logic specifically
-    for rate limits. Other exceptions propagate immediately.
+    Retries on:
+    - YFRateLimitError (429)
+    - ConnectionError / OSError / TimeoutError (network blips, fc.yahoo.com flakiness)
+    - Any exception whose string contains transient markers (5xx, "timeout", etc.)
+
+    Permanent errors (404 / "no data" / "delisted") propagate immediately
+    so the upstream router can fail over to the next vendor without burning
+    the retry budget on a ticker that genuinely doesn't exist.
     """
+    transient_markers = (
+        "rate limit",
+        "rate-limit",
+        "timed out",
+        "timeout",
+        "connection",
+        "temporarily",
+        "try again",
+        "503",
+        "502",
+        "504",
+        "429",
+    )
+    permanent_markers = ("not found", "404", "delisted", "no data")
+
     for attempt in range(max_retries + 1):
         try:
             return func()
-        except YFRateLimitError:
-            if attempt < max_retries:
-                delay = base_delay * (2 ** attempt)
-                logger.warning(f"Yahoo Finance rate limited, retrying in {delay:.0f}s (attempt {attempt + 1}/{max_retries})")
-                time.sleep(delay)
-            else:
+        except YFRateLimitError as exc:
+            err = exc
+            transient = True
+        except (ConnectionError, OSError, TimeoutError) as exc:
+            err = exc
+            transient = True
+        except Exception as exc:  # noqa: BLE001
+            err = exc
+            msg = str(exc).lower()
+            if any(m in msg for m in permanent_markers):
                 raise
+            transient = any(m in msg for m in transient_markers)
+            if not transient:
+                raise
+
+        if attempt < max_retries:
+            delay = base_delay * (2 ** attempt)
+            logger.warning(
+                "yfinance transient error (attempt %d/%d), retrying in %.1fs: %s",
+                attempt + 1, max_retries, delay, err,
+            )
+            time.sleep(delay)
+        else:
+            raise err
 
 
 def _clean_dataframe(data: pd.DataFrame) -> pd.DataFrame:
