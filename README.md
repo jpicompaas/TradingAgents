@@ -150,28 +150,33 @@ This is not required to use the framework.
 
 ### Required APIs
 
-TradingAgents supports multiple LLM providers. Set the API key for your chosen provider:
+The default provider is **Groq** (`llama-3.3-70b-versatile`), so the minimum-viable `.env` is:
 
 ```bash
-export OPENAI_API_KEY=...          # OpenAI (GPT)
-export GOOGLE_API_KEY=...          # Google (Gemini)
-export ANTHROPIC_API_KEY=...       # Anthropic (Claude)
-export XAI_API_KEY=...             # xAI (Grok)
-export DEEPSEEK_API_KEY=...        # DeepSeek
-export DASHSCOPE_API_KEY=...       # Qwen (Alibaba DashScope)
-export ZHIPU_API_KEY=...           # GLM (Zhipu)
-export OPENROUTER_API_KEY=...      # OpenRouter
-export ALPHA_VANTAGE_API_KEY=...   # Alpha Vantage
+GROQ_API_KEY=gsk_...
+TRADINGAGENTS_DISABLE_ANNOUNCEMENTS=1
 ```
 
-For enterprise providers (e.g. Azure OpenAI, AWS Bedrock), copy `.env.enterprise.example` to `.env.enterprise` and fill in your credentials.
+Pick a different provider by setting its key — `.env.example` lists all of them:
 
-For local models, configure Ollama with `llm_provider: "ollama"` in your config.
+| Provider | Env var | Models surfaced in CLI |
+| --- | --- | --- |
+| **Groq** (default) | `GROQ_API_KEY` | `llama-3.3-70b-versatile`, `openai/gpt-oss-20b`, `openai/gpt-oss-120b`, Llama 4 Scout/Maverick, Gemma2 |
+| OpenAI | `OPENAI_API_KEY` | GPT-5.x family |
+| Anthropic | `ANTHROPIC_API_KEY` | Claude 4.x family |
+| Google | `GOOGLE_API_KEY` | Gemini 3.x |
+| xAI | `XAI_API_KEY` | Grok 4.x |
+| DeepSeek | `DEEPSEEK_API_KEY` | DeepSeek V4 (incl. thinking-mode round-trip) |
+| Qwen (DashScope) | `DASHSCOPE_API_KEY` | Qwen 3.x |
+| GLM (Zhipu) | `ZHIPU_API_KEY` | GLM 5 |
+| OpenRouter | `OPENROUTER_API_KEY` | Any OpenRouter model |
+| Ollama (local) | _none_ | Qwen3, GPT-OSS 20B, GLM-4.7-Flash |
 
-Alternatively, copy `.env.example` to `.env` and fill in your keys:
-```bash
-cp .env.example .env
-```
+Optional:
+- `ALPHA_VANTAGE_API_KEY` — alternative market-data vendor (default is `yfinance`, no key needed)
+- `TRADINGAGENTS_PERSONA` — investor/economist overlay (`buffett`, `dalio`, `cathie_wood`, `taleb`, …) applied to the Trader and Portfolio Manager
+
+For enterprise providers (Azure OpenAI, AWS Bedrock), copy `.env.enterprise.example` to `.env.enterprise` and fill in credentials.
 
 ### CLI Usage
 
@@ -198,40 +203,72 @@ An interface will appear showing results as they load, letting you track the age
 
 ## TradingAgents Package
 
+### Tech stack
+
+| Concern | Library / tool |
+| --- | --- |
+| Graph orchestration | `langgraph` (StateGraph, ToolNode, SqliteSaver checkpointer) |
+| LLM wrappers | `langchain-core`, `langchain-openai`, `langchain-anthropic`, `langchain-google-genai` |
+| Structured output | `pydantic` schemas + `bind_tools(method="function_calling")` |
+| Market data | `yfinance` + `curl_cffi`, Alpha Vantage |
+| Indicators | `stockstats`, `pandas` |
+| Interactive CLI | `typer`, `rich`, `questionary` |
+| Persistence | `langgraph-checkpoint-sqlite`, plain Markdown memory log |
+| Containerization | Docker, Docker Compose |
+
+### Resilience layers
+
+Trading-agent runs are long, multi-step, and depend on several flaky external services. The pipeline is built so a single transient failure cannot crash a run:
+
+| Layer | What it catches |
+| --- | --- |
+| **DNS pinning** in `docker-compose.yml` (1.1.1.1 / 8.8.8.8) | ISP DNS sinkholes (e.g. `fc.yahoo.com` returning a black-hole IP) |
+| **`yf_retry`** | yfinance rate limits, connection errors, 5xx, timeouts (6 retries, exponential backoff) |
+| **`route_to_vendor`** | Per-vendor retries (5× for key metrics like price/indicators/fundamentals, 2× otherwise), then failover to a different vendor |
+| **`canonical_ticker`** | LLMs hallucinating exchange suffixes (`TWLO` → `TWLO.TO`) — every data tool uses the user-entered ticker, ignoring whatever the LLM passes |
+| **`GroqChatOpenAI` recovery** | Groq's `tool_use_failed` quirk — parses Groq's malformed `<function=...>` payload directly into a valid `tool_calls` AIMessage, so the graph never even sees the error; final fallback returns an empty AIMessage so the run still finishes |
+| **`ToolNode(handle_tool_errors=True)`** | Any unhandled tool exception (404, malformed args, etc.) becomes a `ToolMessage` containing the error string |
+| **`invoke_structured_or_freetext`** | Falls back to plain `llm.invoke` if structured-output binding fails (e.g. `deepseek-reasoner` has no `tool_choice`) |
+
+Permanent errors (404 / "delisted") short-circuit the retry budget so a wrong ticker fails fast.
+
 ### Implementation Details
 
-We built TradingAgents with LangGraph to ensure flexibility and modularity. The framework supports multiple LLM providers: OpenAI, Google, Anthropic, xAI, DeepSeek, Qwen (Alibaba DashScope), GLM (Zhipu), OpenRouter, Ollama for local models, and Azure OpenAI for enterprise.
+Built with LangGraph for flexibility and modularity. Defaults to Groq for a clone-and-run experience. Supports OpenAI, Anthropic, Google, xAI, DeepSeek, Qwen (DashScope), GLM (Zhipu), OpenRouter, Ollama (local), Azure OpenAI, and AWS Bedrock.
 
 ### Python Usage
 
 To use TradingAgents inside your code, you can import the `tradingagents` module and initialize a `TradingAgentsGraph()` object. The `.propagate()` function will return a decision. You can run `main.py`, here's also a quick example:
 
 ```python
+from dotenv import load_dotenv
+load_dotenv()  # IMPORTANT: must run before importing default_config (it reads
+               # TRADINGAGENTS_PERSONA via os.getenv at import time)
+
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.reports import save_run_bundle
 
-ta = TradingAgentsGraph(debug=True, config=DEFAULT_CONFIG.copy())
+ta = TradingAgentsGraph(debug=False, config=DEFAULT_CONFIG.copy())
+final_state, decision = ta.propagate("NVDA", "2026-01-15")
 
-# forward propagate
-_, decision = ta.propagate("NVDA", "2026-01-15")
+# Auto-save full bundle (analysts + research + trading + risk + portfolio + raw state)
+bundle_dir = save_run_bundle(final_state, "NVDA")
+print(f"Report saved to: {bundle_dir.resolve()}")
 print(decision)
 ```
 
-You can also adjust the default configuration to set your own choice of LLMs, debate rounds, etc.
+Override the defaults to switch provider/models/debate depth:
 
 ```python
-from tradingagents.graph.trading_graph import TradingAgentsGraph
-from tradingagents.default_config import DEFAULT_CONFIG
-
 config = DEFAULT_CONFIG.copy()
-config["llm_provider"] = "openai"        # openai, google, anthropic, xai, deepseek, qwen, glm, openrouter, ollama, azure
-config["deep_think_llm"] = "gpt-5.4"     # Model for complex reasoning
-config["quick_think_llm"] = "gpt-5.4-mini" # Model for quick tasks
+config["llm_provider"] = "groq"                          # default; pick another from the table above
+config["deep_think_llm"] = "openai/gpt-oss-120b"         # Research Manager + Portfolio Manager
+config["quick_think_llm"] = "llama-3.3-70b-versatile"    # analysts, researchers, risk debators, trader
 config["max_debate_rounds"] = 2
+config["trading_persona"] = "warren_buffett"             # optional investor overlay
 
-ta = TradingAgentsGraph(debug=True, config=config)
-_, decision = ta.propagate("NVDA", "2026-01-15")
-print(decision)
+ta = TradingAgentsGraph(debug=False, config=config)
 ```
 
 See `tradingagents/default_config.py` for all configuration options.
@@ -277,32 +314,43 @@ The persona overlay is a **prompt prefix**, not a separate pipeline. The Trader 
 
 Personas do not change which analysts run, which tools are called, or which structured-output schema is used. They steer style and emphasis only. To add a new persona, edit `tradingagents/agents/utils/personas.py` and add a `Persona(...)` entry plus any aliases.
 
-## Persistence and Recovery
+## Outputs
 
-TradingAgents persists two kinds of state across runs.
+Every run writes three things to disk:
 
-### Decision log
+### 1. Auto-saved report bundle
 
-The decision log is always on. Each completed run appends its decision to `~/.tradingagents/memory/trading_memory.md`. On the next run for the same ticker, TradingAgents fetches the realised return (raw and alpha vs SPY), generates a one-paragraph reflection, and injects the most recent same-ticker decisions plus recent cross-ticker lessons into the Portfolio Manager prompt, so each analysis carries forward what worked and what didn't.
+`trading-reports/<TICKER>_<YYYYMMDD_HHMMSS>/` (gitignored, bind-mounted into the container):
 
-Override the path with `TRADINGAGENTS_MEMORY_LOG_PATH`.
+```
+complete_report.md              ← consolidated, with persona/strategy block at top
+full_state.json                 ← raw state for downstream tooling
+1_analysts/{market,sentiment,news,fundamentals}.md
+2_research/{bull,bear,manager}.md      ← bull/bear debate (each with required-assumptions block)
+3_trading/trader.md
+4_risk/{aggressive,conservative,neutral}.md   ← three-way risk debate
+5_portfolio/{decision.md, final_trade_decision.md}
+```
 
-### Checkpoint resume
+Bull and bear writeups end with a structured **`## Required Assumptions for the Bull/Bear Case`** section enumerating eight categories (inflation regime, interest-rate path, geopolitical/war risk, sector demand, regulatory, FX, operational milestones, liquidity) — each with an explicit invalidation signal so the thesis is falsifiable.
 
-Checkpoint resume is opt-in via `--checkpoint`. When enabled, LangGraph saves state after each node so a crashed or interrupted run resumes from the last successful step instead of starting over. On a resume run you will see `Resuming from step N for <TICKER> on <date>` in the logs; on a new run you will see `Starting fresh`. Checkpoints are cleared automatically on successful completion.
+### 2. Decision log (always on)
 
-Per-ticker SQLite databases live at `~/.tradingagents/cache/checkpoints/<TICKER>.db` (override the base with `TRADINGAGENTS_CACHE_DIR`). Use `--clear-checkpoints` to reset all of them before a run.
+Each completed run appends to `~/.tradingagents/memory/trading_memory.md`. On the next run for the same ticker, TradingAgents fetches the realised return (raw and alpha vs SPY), generates a one-paragraph reflection, and injects the most recent same-ticker decisions plus recent cross-ticker lessons into the Portfolio Manager prompt — so each analysis carries forward what worked and what didn't. Override the path with `TRADINGAGENTS_MEMORY_LOG_PATH`.
+
+### 3. Checkpoint resume (opt-in)
+
+`--checkpoint` saves state after each LangGraph node, so a crashed or interrupted run resumes from the last successful step instead of starting over. Per-ticker SQLite databases live at `~/.tradingagents/cache/checkpoints/<TICKER>.db` (override with `TRADINGAGENTS_CACHE_DIR`). Use `--clear-checkpoints` to reset.
 
 ```bash
-tradingagents analyze --checkpoint           # enable for this run
-tradingagents analyze --clear-checkpoints    # reset before running
+docker compose run --rm tradingagents analyze --checkpoint           # enable
+docker compose run --rm tradingagents analyze --clear-checkpoints    # reset
 ```
 
 ```python
 config = DEFAULT_CONFIG.copy()
 config["checkpoint_enabled"] = True
 ta = TradingAgentsGraph(config=config)
-_, decision = ta.propagate("NVDA", "2026-01-15")
 ```
 
 ## Contributing

@@ -1,6 +1,9 @@
+import json
 import logging
 import os
+import re
 import time
+import uuid
 from typing import Any, Optional
 
 from langchain_core.messages import AIMessage
@@ -114,8 +117,7 @@ def _is_groq_tool_use_failed(exc: Exception) -> bool:
     Groq's Llama models intermittently emit tool calls in the legacy
     `<function=name>{json}</function>` text format instead of the OpenAI
     `tool_calls` JSON, and Groq rejects this with HTTP 400 / code
-    'tool_use_failed'. The failure is non-deterministic — a plain retry
-    almost always succeeds.
+    'tool_use_failed'.
     """
     body = getattr(exc, "body", None) or {}
     if isinstance(body, dict):
@@ -127,30 +129,124 @@ def _is_groq_tool_use_failed(exc: Exception) -> bool:
     return "tool_use_failed" in str(exc)
 
 
-class GroqChatOpenAI(NormalizedChatOpenAI):
-    """Groq-specific ChatOpenAI with retry on `tool_use_failed`.
+def _extract_failed_generation(exc: Exception) -> Optional[str]:
+    """Pull the `failed_generation` payload Groq returns alongside the 400."""
+    body = getattr(exc, "body", None) or {}
+    if isinstance(body, dict):
+        err = body.get("error") or {}
+        if isinstance(err, dict):
+            fg = err.get("failed_generation")
+            if isinstance(fg, str) and fg:
+                return fg
+    # SDK sometimes only stringifies the body. Try a regex fallback.
+    m = re.search(r"'failed_generation':\s*'(.+?)'\s*}\s*}", str(exc), re.DOTALL)
+    return m.group(1) if m else None
 
-    Groq's Llama models occasionally produce malformed tool calls (legacy
-    `<function=...>` syntax). Groq rejects these with a 400; retrying
-    almost always fixes it because the failure is sampling-noise, not a
-    persistent prompt issue. We retry a few times with brief backoff
-    before letting the error propagate.
+
+# Match the Llama legacy tool-call syntax in any of the buggy variants Groq
+# has been seen to emit, e.g.:
+#   <function=get_news>{"ticker": "NVDA"}</function>
+#   <function=get_news{"ticker": "NVDA"}</function>          (no closing >)
+#   <function=get_news>"description"{"ticker": "NVDA"}</function>
+_LEGACY_FN_PATTERN = re.compile(
+    r"<function\s*=\s*([\w_./-]+)[^{<]*?(\{.*?\})\s*</function>",
+    re.DOTALL,
+)
+
+
+def _recover_tool_call_message(failed_generation: str) -> Optional[AIMessage]:
+    """Parse Groq's malformed `<function=...>{json}</function>` and rebuild a
+    proper AIMessage with structured `tool_calls`.
+
+    This sidesteps Groq's strict parser entirely: we extract the model's
+    intent ourselves and feed it back into the LangGraph as if the model had
+    emitted valid tool calls. Returns None if the payload can't be parsed.
+    """
+    tool_calls = []
+    for match in _LEGACY_FN_PATTERN.finditer(failed_generation):
+        name = match.group(1).strip()
+        json_blob = match.group(2)
+        try:
+            args = json.loads(json_blob)
+        except json.JSONDecodeError:
+            # Try to repair common Llama mistakes (single quotes, trailing
+            # commas) before giving up.
+            try:
+                repaired = json_blob.replace("'", '"')
+                repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+                args = json.loads(repaired)
+            except json.JSONDecodeError:
+                continue
+        tool_calls.append({
+            "name": name,
+            "args": args if isinstance(args, dict) else {},
+            "id": f"groq_recovered_{uuid.uuid4().hex[:12]}",
+            "type": "tool_call",
+        })
+
+    if not tool_calls:
+        return None
+
+    return AIMessage(content="", tool_calls=tool_calls)
+
+
+class GroqChatOpenAI(NormalizedChatOpenAI):
+    """Groq-specific ChatOpenAI hardened against `tool_use_failed`.
+
+    Resilience strategy:
+    1. **Recover** — when Groq rejects a malformed tool call, parse the
+       model's `failed_generation` ourselves and synthesize a valid
+       AIMessage with structured `tool_calls`. The LangGraph never even
+       sees the error.
+    2. **Retry** — if recovery fails (no parseable tool call in the
+       failed_generation), retry the underlying call with exponential
+       backoff. The model's next sample usually emits valid syntax.
+    3. **Degrade gracefully** — if every retry also fails to recover,
+       return an empty AIMessage so the analyst node moves on with the
+       data it already has rather than crashing the entire run.
+
+    This means a `tool_use_failed` from Groq is, at worst, a single
+    skipped tool call — never a fatal error.
     """
 
-    _GROQ_TOOL_USE_RETRIES = 3
-    _GROQ_TOOL_USE_BACKOFF = 0.5  # seconds, doubled each attempt
+    _GROQ_TOOL_USE_RETRIES = 5
+    _GROQ_TOOL_USE_BACKOFF = 1.0  # seconds, doubled each attempt (max ~31s total)
 
     def invoke(self, input, config=None, **kwargs):
         delay = self._GROQ_TOOL_USE_BACKOFF
+        last_failed_gen: Optional[str] = None
+
         for attempt in range(self._GROQ_TOOL_USE_RETRIES + 1):
             try:
                 return normalize_content(
                     ChatOpenAI.invoke(self, input, config, **kwargs)
                 )
             except Exception as exc:
-                if attempt < self._GROQ_TOOL_USE_RETRIES and _is_groq_tool_use_failed(exc):
+                if not _is_groq_tool_use_failed(exc):
+                    # Not the Groq quirk — let other handlers see it.
+                    raise
+
+                last_failed_gen = _extract_failed_generation(exc) or last_failed_gen
+
+                # Step 1: try to recover the model's intent from the
+                # malformed payload. Most reliable path — succeeds on
+                # the very first failure with no retries needed.
+                if last_failed_gen:
+                    recovered = _recover_tool_call_message(last_failed_gen)
+                    if recovered is not None:
+                        logger.warning(
+                            "Groq tool_use_failed on attempt %d — recovered %d "
+                            "tool call(s) by parsing failed_generation; continuing.",
+                            attempt + 1,
+                            len(recovered.tool_calls),
+                        )
+                        return recovered
+
+                # Step 2: couldn't parse — retry the API call.
+                if attempt < self._GROQ_TOOL_USE_RETRIES:
                     logger.warning(
-                        "Groq tool_use_failed (attempt %d/%d); retrying in %.1fs",
+                        "Groq tool_use_failed (attempt %d/%d); could not parse "
+                        "failed_generation, retrying in %.1fs",
                         attempt + 1,
                         self._GROQ_TOOL_USE_RETRIES,
                         delay,
@@ -158,7 +254,21 @@ class GroqChatOpenAI(NormalizedChatOpenAI):
                     time.sleep(delay)
                     delay *= 2
                     continue
-                raise
+
+                # Step 3: exhausted retries AND couldn't parse. Don't crash
+                # the graph — return whatever text the model produced so the
+                # analyst can move on with what it already has.
+                logger.error(
+                    "Groq tool_use_failed: exhausted %d retries and could not "
+                    "parse failed_generation. Returning empty AIMessage so the "
+                    "graph continues. Last failed_generation: %r",
+                    self._GROQ_TOOL_USE_RETRIES,
+                    (last_failed_gen or "")[:500],
+                )
+                return AIMessage(
+                    content=last_failed_gen or "",
+                    additional_kwargs={"groq_tool_use_failed": True},
+                )
 
 # Kwargs forwarded from user config to ChatOpenAI
 _PASSTHROUGH_KWARGS = (
