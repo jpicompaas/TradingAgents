@@ -66,6 +66,25 @@ def create_portfolio_manager(llm):
 
 ---
 
+**Style — concise and useful, no slop.** Do not restate facts the reader can find
+in the research plan, the trader proposal, or the risk debate above. The
+executive summary is at most three sentences and the investment thesis adds
+new synthesis or judgment, not a recap. If you have nothing concrete to add to
+a section, say less. Empty is better than filler — every sentence must add a
+signal a reader cannot get from the source material.
+
+**Price levels — populate the `levels` field with pre-earnings estimates** valid
+only until the next scheduled earnings event:
+- `next_earnings_date` (ISO YYYY-MM-DD if known)
+- `accumulate_below`: add-to-position dip-buy zone
+- `hold_zone_low` / `hold_zone_high`: no-action range
+- `trim_above`: take-profit level
+- `exit_below`: stop / thesis-broken level
+
+Anchor each level in something specific (technical level, prior support,
+valuation floor, post-event reaction). **Leave any field unset if you cannot
+defend it** — inventing numbers to fill the schema is worse than omitting them.
+
 Be decisive and ground every conclusion in specific evidence from the analysts.{get_language_instruction()}"""
 
         final_trade_decision = invoke_structured_or_freetext(

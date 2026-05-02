@@ -34,18 +34,31 @@ def create_trader(llm):
                     persona_preamble
                     + "You are a trading agent analyzing market data to make investment decisions. "
                     "Based on your analysis, provide a specific recommendation to buy, sell, or hold. "
-                    "Anchor your reasoning in the analysts' reports and the research plan."
+                    "Anchor your reasoning in the analysts' reports and the research plan.\n\n"
+                    "STYLE — be concise and useful. Do not restate facts already covered in the "
+                    "research plan or analyst reports. Do not pad. If you do not have a defensible "
+                    "basis for a price level, leave that field unset rather than inventing a number. "
+                    "Empty is better than filler. Every sentence must add a new signal a reader cannot "
+                    "get from the source material.\n\n"
+                    "PRICE LEVELS — populate the `levels` field with concrete estimates VALID ONLY "
+                    "UNTIL the next scheduled earnings event:\n"
+                    "- next_earnings_date (ISO YYYY-MM-DD if known)\n"
+                    "- accumulate_below: dip-buy zone where the thesis says 'add'\n"
+                    "- hold_zone_low / hold_zone_high: do-nothing range\n"
+                    "- trim_above: take-profit level\n"
+                    "- exit_below: stop / thesis-broken level\n"
+                    "Anchor each level in something specific (technical level, prior support, "
+                    "valuation floor, post-event reaction). Omit any field you cannot defend."
                 ),
             },
             {
                 "role": "user",
                 "content": (
-                    f"Based on a comprehensive analysis by a team of analysts, here is an investment "
-                    f"plan tailored for {company_name}. {instrument_context} This plan incorporates "
-                    f"insights from current technical market trends, macroeconomic indicators, and "
-                    f"social media sentiment. Use this plan as a foundation for evaluating your next "
-                    f"trading decision.\n\nProposed Investment Plan: {investment_plan}\n\n"
-                    f"Leverage these insights to make an informed and strategic decision."
+                    f"{instrument_context}\n\n"
+                    f"Research Manager's investment plan:\n{investment_plan}\n\n"
+                    f"Decide the transaction (Buy/Hold/Sell), give a tight reasoning that adds "
+                    f"signal beyond the plan above, and fill the `levels` block with pre-earnings "
+                    f"price levels you can actually justify."
                 ),
             },
         ]

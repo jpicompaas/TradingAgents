@@ -19,9 +19,18 @@ so that:
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
+
+# Pydantic 2.13 strict-validates ``(str, Enum)`` types in some langchain
+# structured-output paths (rejecting bare strings with `is_instance_of`).
+# Typing the rating/action fields as ``Literal[...]`` keeps the same JSON
+# schema for the model but avoids that validator class entirely. The Enum
+# classes below are kept as named constants for any non-schema callers.
+
+PortfolioRatingValue = Literal["Buy", "Overweight", "Hold", "Underweight", "Sell"]
+TraderActionValue = Literal["Buy", "Hold", "Sell"]
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +57,89 @@ class TraderAction(str, Enum):
     Overweight / Underweight calls happen later at the Portfolio Manager.
     """
 
+
+class LevelEstimates(BaseModel):
+    """Pre-earnings price levels at which the thesis changes state.
+
+    All numeric fields are in the instrument's quote currency. **Every field
+    is optional** — leave it None if you do not have a defensible basis from
+    the analyst reports. Inventing numbers to fill the schema is worse than
+    omitting them.
+
+    These estimates are explicitly valid only until ``next_earnings_date``;
+    a fresh earnings print is expected to reset the levels.
+    """
+
+    next_earnings_date: Optional[str] = Field(
+        default=None,
+        description=(
+            "ISO date (YYYY-MM-DD) of the next scheduled earnings event, if "
+            "known from the analyst reports. These levels expire on this date."
+        ),
+    )
+    accumulate_below: Optional[float] = Field(
+        default=None,
+        description="Add-to-position level: dip-buy zone. Price under which the thesis says accumulate.",
+    )
+    hold_zone_low: Optional[float] = Field(
+        default=None,
+        description="Lower bound of the no-action range — between this and hold_zone_high, simply hold.",
+    )
+    hold_zone_high: Optional[float] = Field(
+        default=None,
+        description="Upper bound of the no-action range — between hold_zone_low and this, simply hold.",
+    )
+    trim_above: Optional[float] = Field(
+        default=None,
+        description="Take-profit level: price above which to trim or take partial profits.",
+    )
+    exit_below: Optional[float] = Field(
+        default=None,
+        description=(
+            "Stop / thesis-broken level. If price closes below this, the bull "
+            "thesis has failed and the position should be exited."
+        ),
+    )
+
+
+def _format_level(prefix: str, value: Optional[float]) -> Optional[str]:
+    if value is None:
+        return None
+    return f"{prefix}{value:g}"
+
+
+def render_level_estimates(levels: Optional[LevelEstimates]) -> str:
+    """Render a LevelEstimates block, or empty string if nothing to show.
+
+    Output is a single compact bulleted block. Any field left None is
+    omitted entirely — empty is better than filler.
+    """
+    if levels is None:
+        return ""
+    lines = []
+    if levels.accumulate_below is not None:
+        lines.append(_format_level("Accumulate below ", levels.accumulate_below))
+    if levels.hold_zone_low is not None and levels.hold_zone_high is not None:
+        lines.append(f"Hold {levels.hold_zone_low:g} – {levels.hold_zone_high:g}")
+    elif levels.hold_zone_low is not None:
+        lines.append(_format_level("Hold above ", levels.hold_zone_low))
+    elif levels.hold_zone_high is not None:
+        lines.append(_format_level("Hold below ", levels.hold_zone_high))
+    if levels.trim_above is not None:
+        lines.append(_format_level("Trim above ", levels.trim_above))
+    if levels.exit_below is not None:
+        lines.append(_format_level("Exit below ", levels.exit_below))
+
+    if not lines:
+        return ""
+
+    horizon = (
+        f" (valid until next earnings: {levels.next_earnings_date})"
+        if levels.next_earnings_date
+        else " (valid until next earnings)"
+    )
+    return "**Levels**" + horizon + ":\n- " + "\n- ".join(lines)
+
     BUY = "Buy"
     HOLD = "Hold"
     SELL = "Sell"
@@ -67,7 +159,7 @@ class ResearchPlan(BaseModel):
     instructions the trader can execute against.
     """
 
-    recommendation: PortfolioRating = Field(
+    recommendation: PortfolioRatingValue = Field(
         description=(
             "The investment recommendation. Exactly one of Buy / Overweight / "
             "Hold / Underweight / Sell. Reserve Hold for situations where the "
@@ -93,7 +185,7 @@ class ResearchPlan(BaseModel):
 def render_research_plan(plan: ResearchPlan) -> str:
     """Render a ResearchPlan to markdown for storage and the trader's prompt context."""
     return "\n".join([
-        f"**Recommendation**: {plan.recommendation.value}",
+        f"**Recommendation**: {plan.recommendation}",
         "",
         f"**Rationale**: {plan.rationale}",
         "",
@@ -115,7 +207,7 @@ class TraderProposal(BaseModel):
     entry, stop-loss, and sizing.
     """
 
-    action: TraderAction = Field(
+    action: TraderActionValue = Field(
         description="The transaction direction. Exactly one of Buy / Hold / Sell.",
     )
     reasoning: str = Field(
@@ -136,6 +228,15 @@ class TraderProposal(BaseModel):
         default=None,
         description="Optional sizing guidance, e.g. '5% of portfolio'.",
     )
+    levels: Optional[LevelEstimates] = Field(
+        default=None,
+        description=(
+            "Pre-earnings price levels at which the thesis changes state "
+            "(accumulate / hold / trim / exit), valid until the next earnings "
+            "event. Leave None or omit individual fields if no defensible "
+            "basis exists in the analyst reports."
+        ),
+    )
 
 
 def render_trader_proposal(proposal: TraderProposal) -> str:
@@ -146,7 +247,7 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
     and any external code that greps for it.
     """
     parts = [
-        f"**Action**: {proposal.action.value}",
+        f"**Action**: {proposal.action}",
         "",
         f"**Reasoning**: {proposal.reasoning}",
     ]
@@ -156,9 +257,12 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
         parts.extend(["", f"**Stop Loss**: {proposal.stop_loss}"])
     if proposal.position_sizing:
         parts.extend(["", f"**Position Sizing**: {proposal.position_sizing}"])
+    levels_md = render_level_estimates(proposal.levels)
+    if levels_md:
+        parts.extend(["", levels_md])
     parts.extend([
         "",
-        f"FINAL TRANSACTION PROPOSAL: **{proposal.action.value.upper()}**",
+        f"FINAL TRANSACTION PROPOSAL: **{proposal.action.upper()}**",
     ])
     return "\n".join(parts)
 
@@ -177,7 +281,7 @@ class PortfolioDecision(BaseModel):
     the rating-scale guidance.
     """
 
-    rating: PortfolioRating = Field(
+    rating: PortfolioRatingValue = Field(
         description=(
             "The final position rating. Exactly one of Buy / Overweight / Hold / "
             "Underweight / Sell, picked based on the analysts' debate."
@@ -204,6 +308,15 @@ class PortfolioDecision(BaseModel):
         default=None,
         description="Optional recommended holding period, e.g. '3-6 months'.",
     )
+    levels: Optional[LevelEstimates] = Field(
+        default=None,
+        description=(
+            "Pre-earnings price levels at which the position changes state "
+            "(accumulate / hold / trim / exit), valid until the next earnings "
+            "event. Leave None or omit individual fields if no defensible "
+            "basis exists in the analyst reports."
+        ),
+    )
 
 
 def render_pm_decision(decision: PortfolioDecision) -> str:
@@ -215,7 +328,7 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     parsers and the report writers already handle.
     """
     parts = [
-        f"**Rating**: {decision.rating.value}",
+        f"**Rating**: {decision.rating}",
         "",
         f"**Executive Summary**: {decision.executive_summary}",
         "",
@@ -225,4 +338,7 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         parts.extend(["", f"**Price Target**: {decision.price_target}"])
     if decision.time_horizon:
         parts.extend(["", f"**Time Horizon**: {decision.time_horizon}"])
+    levels_md = render_level_estimates(decision.levels)
+    if levels_md:
+        parts.extend(["", levels_md])
     return "\n".join(parts)
