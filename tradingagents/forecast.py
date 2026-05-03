@@ -1,23 +1,32 @@
 """Three-flavor (headwinds / same / tailwinds) forward-price forecast.
 
-Anchors the curves on the LLM's +30 / +60 / +90 day estimates that the
-Portfolio Manager (and Trader) emit in their ``LevelEstimates.estimate_*``
-fields, then interpolates a daily path between today and each anchor.
-±1σ bands widen with √t using realized volatility from the trailing year
-of OHLCV — so the *uncertainty* is grounded in real data even though the
-*direction* comes from the LLM.
+Design (post-realism overhaul):
 
-Three scenarios:
+- **Same** — anchored at the Portfolio Manager's ``expected`` price at
+  +30 / +60 / +90 days, log-linearly interpolated from today's close.
+  If the PM didn't emit a number for some horizon, that horizon falls
+  back to today's close (flat assumption) — we never silently disappear.
+- **Headwinds** — a *real* bearish scenario. For each horizon we take
+  ``min(PM.low, today × exp(-k·σ·√(days/252)))`` so the bear path can
+  drop below today even when the LLM's whole view is bullish. ``σ`` is
+  the annualized realized volatility from the trailing year of OHLCV.
+- **Tailwinds** — symmetric: ``max(PM.high, today × exp(+k·σ·√(days/252)))``.
 
-- **headwinds** — uses each horizon's ``low`` (or ``expected`` if low is
-  unset). Bearish anchor.
-- **same** — uses ``expected``. Base case.
-- **tailwinds** — uses ``high`` (or ``expected``). Bullish anchor.
+The result: even if the LLM is unanimously bullish (persona-skewed,
+recency-biased, training-data-dated), the headwinds curve still
+reflects the vol-implied downside the *market* would generate, not the
+LLM's softened version. ±1σ bands around each curve widen with √t
+using the same realized-vol number, so the displayed uncertainty
+matches the stock's actual recent volatility.
 
 Outputs in the report bundle directory:
 - ``forecast.csv`` — daily rows with all three paths and their ±1σ bands
 - ``forecast.png`` — fan chart visualizing all three (matplotlib, optional)
 - A summary block injected into ``complete_report.md``
+
+Always emits a forecast when historical OHLCV is available — even if
+the PM left every horizon unset (in which case the curves are pure
+vol-driven scenarios from today's close).
 """
 
 from __future__ import annotations
@@ -38,6 +47,15 @@ _SCENARIOS = (
     ("same", "expected", "#666666"),
     ("tailwinds", "high", "#229922"),
 )
+
+# Stress applied to the vol-implied bear/bull floors, in σ-units. 1.0 ≈
+# one standard deviation of the trailing-year log returns. Bigger = more
+# pessimistic/optimistic vol-floor for headwinds / vol-ceiling for tailwinds.
+_VOL_STRESS_K = 1.0
+
+# Forecast horizons we project to (days). Always include +90 even if the
+# PM only filled some of the earlier ones.
+_HORIZONS = (30, 60, 90)
 
 
 def _fetch_history(ticker: str, end_date: str, lookback_days: int = 365) -> Optional[pd.DataFrame]:
@@ -92,28 +110,83 @@ def _bands(path: np.ndarray, daily_sigma: float) -> tuple[np.ndarray, np.ndarray
     return path * np.exp(-sigma_t), path * np.exp(+sigma_t)
 
 
-def _scenario_anchors(
-    levels: Mapping[str, Any], scenario_attr: str
-) -> list[tuple[int, float]]:
-    """Build (days, anchor_price) pairs for one scenario.
+def _llm_value(
+    levels: Optional[Mapping[str, Any]], horizon_days: int, attr: str
+) -> Optional[float]:
+    """Extract the LLM's value for one horizon × scenario, or None."""
+    if not levels:
+        return None
+    key = f"estimate_{horizon_days}d"
+    est = levels.get(key)
+    if not est:
+        return None
+    val = est.get(attr)
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
 
-    Falls back to ``expected`` when the scenario-specific field (low/high)
-    is unset, so a single point estimate still drives all three flavors.
+
+def _vol_floor(today: float, days: int, daily_sigma: float, sign: float) -> float:
+    """Vol-implied price level at ``days`` from today.
+
+    sign = -1 for the bearish floor, +1 for the bullish ceiling.
+    Uses geometric-Brownian-motion-style drift: today × exp(sign·k·σ·√t).
     """
-    out: list[tuple[int, float]] = []
-    for days, key in ((30, "estimate_30d"), (60, "estimate_60d"), (90, "estimate_90d")):
-        est = levels.get(key)
-        if not est:
-            continue
-        val = est.get(scenario_attr)
-        if val is None:
-            val = est.get("expected")
-        if val is not None:
-            try:
-                out.append((days, float(val)))
-            except (TypeError, ValueError):
-                continue
-    return out
+    return today * float(np.exp(sign * _VOL_STRESS_K * daily_sigma * np.sqrt(days)))
+
+
+def _build_anchors(
+    today: float,
+    daily_sigma: float,
+    levels: Optional[Mapping[str, Any]],
+) -> dict[str, list[tuple[int, float]]]:
+    """Build (days, anchor_price) pairs for each of the three scenarios.
+
+    Honest realism rules:
+
+    - **Same**: log-linear from today through PM's ``expected`` at +30 /
+      +60 / +90 days. If a horizon's expected is missing, that horizon
+      falls back to today (flat). If PM's expected is wildly stale
+      (>50% gap vs today's close — typical when the LLM uses its
+      training-data price for the ticker), we treat it as unreliable
+      and fall back to today.
+    - **Headwinds**: pure vol-floor — ``today × exp(-k·σ·√t)``. The
+      LLM's ``low`` is *ignored* because it's almost always anchored
+      on the LLM's central view rather than a real downside scenario,
+      and is also vulnerable to stale training-data prices.
+    - **Tailwinds**: pure vol-ceiling — symmetric.
+
+    Net: the central path reflects the LLM's directional view (when
+    plausible), and the bear/bull cases reflect the stock's actual
+    realized volatility regardless of LLM bias.
+    """
+    anchors: dict[str, list[tuple[int, float]]] = {
+        "headwinds": [],
+        "same": [],
+        "tailwinds": [],
+    }
+
+    for days in _HORIZONS:
+        # Same — LLM expected if it's plausible, else flat at today.
+        expected = _llm_value(levels, days, "expected")
+        same_val = today
+        if expected is not None and 0.5 * today <= expected <= 2.0 * today:
+            same_val = expected
+        anchors["same"].append((days, same_val))
+
+        # Headwinds — pure vol-floor (no LLM input).
+        anchors["headwinds"].append(
+            (days, _vol_floor(today, days, daily_sigma, sign=-1.0))
+        )
+        # Tailwinds — pure vol-ceiling (no LLM input).
+        anchors["tailwinds"].append(
+            (days, _vol_floor(today, days, daily_sigma, sign=+1.0))
+        )
+
+    return anchors
 
 
 def generate_three_flavor_forecast(
@@ -129,9 +202,6 @@ def generate_three_flavor_forecast(
     Portfolio Manager left the +30/+60/+90 estimates unset, or because
     historical OHLCV could not be fetched.
     """
-    if not levels:
-        return None
-
     history = _fetch_history(ticker, analysis_date)
     if history is None or len(history) < 30:
         logger.info("forecast: insufficient history for %s; skipping", ticker)
@@ -141,9 +211,13 @@ def generate_three_flavor_forecast(
     log_returns = np.log(history["Close"]).diff().dropna()
     daily_sigma = float(log_returns.std())
 
+    # Build realistic per-scenario anchors (honest bear/bull from realized
+    # vol; LLM's `expected` only shapes the central case).
+    anchors_by_scenario = _build_anchors(last_close, daily_sigma, levels)
+
     paths: dict[str, dict] = {}
-    for scenario, attr, color in _SCENARIOS:
-        anchors = _scenario_anchors(levels, attr)
+    for scenario, _attr, color in _SCENARIOS:
+        anchors = anchors_by_scenario.get(scenario) or []
         if not anchors:
             continue
         max_day = max(d for d, _ in anchors)
@@ -259,10 +333,19 @@ def render_forecast_section(meta: Optional[Mapping[str, Any]], ticker: str) -> s
         f"Realized annualized vol: **{meta['annualized_vol_pct']:.1f}%** · "
         f"Bands shown are ±1σ widening with √t."
     )
+    sections.append(
+        "_**Same** = LLM's `expected` (central view) when it's within "
+        "±50% of today's close, else flat at today (LLM may have stale "
+        "training-data prices). **Headwinds** and **Tailwinds** are "
+        "vol-driven scenarios — `today × exp(±k·σ·√t)` — anchored in "
+        "the stock's own realized volatility, not the LLM's view. So "
+        "even on a unanimously bullish call, headwinds reflects what "
+        "the market's actual volatility says is plausible downside._"
+    )
     if meta.get("png_path"):
         sections.append(f"![{ticker} forecast](forecast.png)")
     sections.append("")
-    sections.append("| Scenario | +30d / +60d / +90d (anchor) |")
+    sections.append("| Scenario | +30d / +60d / +90d |")
     sections.append("|---|---|")
     for scenario, info in meta["scenarios"].items():
         anchors_str = " / ".join(f"{v:.0f}" for _, v in info["anchors"])
