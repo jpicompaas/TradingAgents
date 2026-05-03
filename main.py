@@ -24,8 +24,12 @@ config["data_vendors"] = {
     "news_data": "yfinance",                 # Options: alpha_vantage, yfinance
 }
 
-TICKER = "MSFT"
-TRADE_DATE = "2026-05-03"
+import os as _os
+
+# Defaults can be overridden via env so the webapp / cron jobs can drive
+# main.py without code edits.
+TICKER = _os.environ.get("TRADINGAGENTS_TICKER", "MSFT")
+TRADE_DATE = _os.environ.get("TRADINGAGENTS_TRADE_DATE", "2026-05-03")
 
 # Initialize with custom config
 ta = TradingAgentsGraph(debug=False, config=config)

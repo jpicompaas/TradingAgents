@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ ticker }} · {{ title }} · TradingAgents{% endblock %}
+{% block body %}
+<p class="muted small">
+  <a href="/reports/{{ ticker }}?run={{ bundle.name }}">← back to {{ ticker }} ({{ bundle.display_timestamp }})</a>
+</p>
+<h1>{{ title }}</h1>
+<article class="report">{{ rendered_html | safe }}</article>
+{% endblock %}

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}{{ run.ticker }} run · TradingAgents{% endblock %}
+{% block body %}
+<header class="run-header">
+  <h1>{{ run.ticker }} <span class="muted">· {{ run.trade_date }}</span></h1>
+  <div class="meta">
+    Persona: <strong>{{ run.persona or "neutral" }}</strong> ·
+    Status: <span id="status" class="status status-{{ run.status }}">{{ run.status }}</span>
+  </div>
+</header>
+
+<section>
+  <h2>Live output</h2>
+  <pre id="stream" class="stream"></pre>
+</section>
+
+<p id="result" class="result hidden">
+  <a id="result-link" href="#">View full report →</a>
+</p>
+
+<script>
+(function () {
+  const stream = document.getElementById("stream");
+  const status = document.getElementById("status");
+  const result = document.getElementById("result");
+  const link = document.getElementById("result-link");
+  const ticker = {{ run.ticker | tojson }};
+
+  const es = new EventSource("/run/{{ run.run_id }}/stream");
+
+  es.addEventListener("line", (ev) => {
+    stream.textContent += ev.data + "\n";
+    stream.scrollTop = stream.scrollHeight;
+  });
+
+  es.addEventListener("done", (ev) => {
+    es.close();
+    // payload is "status=done bundle=NAME"
+    const m = /status=(\S+)\s+bundle=(\S*)/.exec(ev.data || "");
+    if (m) {
+      const newStatus = m[1];
+      const bundle = m[2];
+      status.textContent = newStatus;
+      status.className = "status status-" + newStatus;
+      if (newStatus === "done" && bundle) {
+        link.href = "/reports/" + ticker + "?run=" + encodeURIComponent(bundle);
+        result.classList.remove("hidden");
+      }
+    }
+  });
+
+  es.onerror = () => {
+    // Browser will retry automatically; nothing to do here.
+  };
+})();
+</script>
+{% endblock %}

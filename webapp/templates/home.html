@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block body %}
+<section class="hero">
+  <h1>TradingAgents</h1>
+  <p class="muted">Multi-agent LLM trading framework — live runs and persisted reports.</p>
+</section>
+
+<section class="grid two">
+  <a class="card cta" href="/run">
+    <h2>Run a new analysis</h2>
+    <p>Pick a ticker, date, and persona; watch the agents stream their work in the browser.</p>
+  </a>
+  <a class="card cta" href="/reports">
+    <h2>Browse past reports</h2>
+    <p>Drill into any ticker; tabs by persona; dropdown to flip through previous runs.</p>
+  </a>
+</section>
+
+{% if tickers %}
+<section>
+  <h2>Tickers on disk</h2>
+  <ul class="chips">
+    {% for t in tickers %}
+      <li><a class="chip" href="/reports/{{ t }}">{{ t }}</a></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if runs %}
+<section>
+  <h2>Recent runs (in this session)</h2>
+  <ul class="run-list">
+    {% for r in runs %}
+      <li>
+        <a href="/run/{{ r.run_id }}">{{ r.ticker }} · {{ r.trade_date }} · {{ r.persona or "neutral" }}</a>
+        <span class="status status-{{ r.status }}">{{ r.status }}</span>
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% endblock %}

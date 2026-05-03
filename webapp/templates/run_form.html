@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Run analysis · TradingAgents{% endblock %}
+{% block body %}
+<h1>Run a new analysis</h1>
+<form method="post" action="/run" class="form">
+  <label>
+    <span>Ticker</span>
+    <input type="text" name="ticker" required value="{{ default_ticker }}" autocomplete="off">
+  </label>
+  <label>
+    <span>Trade date</span>
+    <input type="date" name="trade_date" required value="{{ default_date }}">
+  </label>
+  <label>
+    <span>Investor persona <em class="muted">(optional)</em></span>
+    <select name="persona">
+      <option value="">— neutral —</option>
+      {% for p in personas %}
+        <option value="{{ p }}" {% if p == default_persona %}selected{% endif %}>{{ p }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit">Start analysis</button>
+</form>
+<p class="muted small">Defaults are read from <code>.env</code>; the analysis runs as a subprocess of this webapp container and writes its bundle to <code>trading-reports/</code>.</p>
+{% endblock %}

@@ -18,6 +18,27 @@ services:
     tty: true
     stdin_open: true
 
+  webapp:
+    # Same image as the CLI service — the webapp imports the tradingagents
+    # package directly and spawns ``python main.py`` for live runs.
+    build: .
+    image: tradingagents-tradingagents
+    env_file:
+      - .env
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    volumes:
+      - ./.tradingagents:/home/appuser/.tradingagents
+      - ./trading-reports:/home/appuser/app/trading-reports
+    ports:
+      - "8000:8000"
+    entrypoint: ["uvicorn"]
+    command:
+      - "webapp.main:app"
+      - "--host=0.0.0.0"
+      - "--port=8000"
+
   ollama:
     image: ollama/ollama:latest
     volumes:

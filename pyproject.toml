@@ -19,6 +19,11 @@ dependencies = [
     "langgraph-checkpoint-sqlite>=2.0.0",
     "matplotlib>=3.8.0",
     "pandas>=2.3.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.32.0",
+    "jinja2>=3.1.0",
+    "markdown>=3.6",
+    "python-multipart>=0.0.9",
     "parsel>=1.10.0",
     "pytz>=2025.2",
     "questionary>=2.1.0",
@@ -37,10 +42,11 @@ dependencies = [
 tradingagents = "cli.main:app"
 
 [tool.setuptools.packages.find]
-include = ["tradingagents*", "cli*"]
+include = ["tradingagents*", "cli*", "webapp*"]
 
 [tool.setuptools.package-data]
 cli = ["static/*"]
+webapp = ["templates/*", "static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
