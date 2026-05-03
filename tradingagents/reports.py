@@ -14,6 +14,10 @@ from typing import Any, Mapping, Optional
 
 from tradingagents.agents.utils.personas import get_persona
 from tradingagents.dataflows.config import get_config
+from tradingagents.forecast import (
+    generate_three_flavor_forecast,
+    render_forecast_section,
+)
 
 
 DEFAULT_REPORTS_ROOT = Path("trading-reports")
@@ -186,6 +190,19 @@ def save_run_bundle(
         sections.append(
             "## VI. Final Trade Decision\n\n" + final_decision
         )
+
+    # Three-flavor forecast (headwinds / same / tailwinds).
+    # Best-effort: skipped silently if the PM didn't populate `pm_levels`,
+    # if yfinance is unavailable, or if matplotlib isn't installed.
+    forecast_meta = generate_three_flavor_forecast(
+        ticker=ticker,
+        analysis_date=str(final_state.get("trade_date") or ""),
+        levels=final_state.get("pm_levels"),
+        output_dir=save_path,
+    )
+    forecast_section = render_forecast_section(forecast_meta, ticker)
+    if forecast_section:
+        sections.append(forecast_section)
 
     # Consolidated report — header includes the active persona and the
     # strategy/philosophy fragment that was actually applied during the run.

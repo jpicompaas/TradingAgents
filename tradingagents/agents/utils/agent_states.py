@@ -71,3 +71,7 @@ class AgentState(MessagesState):
     ]
     final_trade_decision: Annotated[str, "Final decision made by the Risk Analysts"]
     past_context: Annotated[str, "Memory log context injected at run start (same-ticker decisions + cross-ticker lessons)"]
+    pm_levels: Annotated[
+        dict,
+        "Structured LevelEstimates dict from the Portfolio Manager (state-change levels + +30/+60/+90d horizon estimates), used to drive the three-flavor forecast.",
+    ]
