@@ -39,6 +39,10 @@
 {% endif %}
 
 {% if active_bundle %}
+  <p class="forecast-link">
+    <a class="btn" href="/reports/{{ ticker }}/{{ active_bundle.name }}/forecast">📈 View daily forecast & scenarios →</a>
+  </p>
+
   {% if section_files %}
   <details class="sections">
     <summary>Per-section files ({{ section_files.values()|map('length')|sum }})</summary>
@@ -48,7 +52,7 @@
           <strong>{{ subdir }}</strong>
           <ul>
             {% for f in files %}
-              <li><a href="/reports/{{ ticker }}/{{ active_bundle.name }}/section/{{ subdir }}/{{ f.name }}">{{ f.name }}</a></li>
+              <li><a href="/reports/{{ ticker }}/{{ active_bundle.name }}/section/{{ subdir }}/{{ f }}">{{ f }}</a></li>
             {% endfor %}
           </ul>
         </li>

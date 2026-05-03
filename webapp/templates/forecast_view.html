@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}{{ ticker }} forecast · TradingAgents{% endblock %}
+{% block body %}
+
+<header class="ticker-header">
+  <h1>{{ ticker }} <span class="muted">· daily forecast</span></h1>
+  <p class="muted">
+    Run: <strong>{{ bundle.display_timestamp }}</strong> · persona <strong>{{ bundle.persona or "neutral" }}</strong>
+    · <a href="/reports/{{ ticker }}?persona={{ bundle.persona_label }}&run={{ bundle.name }}">← back to full report</a>
+  </p>
+</header>
+
+{% if scenarios %}
+<section class="scenarios-grid">
+  {% set scen_meta = [
+    ("Headwinds", "headwinds_summary", "headwinds_factors", "scenario-bear"),
+    ("Same / current", "same_summary", "same_factors", "scenario-same"),
+    ("Tailwinds", "tailwinds_summary", "tailwinds_factors", "scenario-bull"),
+  ] %}
+  {% for label, sum_key, fac_key, css_class in scen_meta %}
+    <article class="scenario-card {{ css_class }}">
+      <h2>{{ label }}</h2>
+      <p class="scenario-summary">{{ scenarios.get(sum_key) or "" }}</p>
+      {% if scenarios.get(fac_key) %}
+        <ul class="factor-list">
+          {% for f in scenarios.get(fac_key) %}
+            <li class="factor impact-{{ f.impact }}">
+              <div class="factor-head">
+                <span class="factor-label">{{ f.factor }}</span>
+                <span class="factor-prob">{{ f.probability_pct }}%</span>
+              </div>
+              <div class="factor-meta">
+                <span class="impact-badge impact-{{ f.impact }}">impact: {{ f.impact }}</span>
+              </div>
+              <p class="factor-rationale">{{ f.rationale }}</p>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </article>
+  {% endfor %}
+</section>
+{% else %}
+<section class="muted-box">
+  <p class="muted">
+    No <code>scenarios.json</code> in this bundle. Newer runs synthesize a per-ticker
+    factor breakdown (probabilities + impact) at end-of-run; older runs only have the
+    forecast curves below.
+  </p>
+</section>
+{% endif %}
+
+<section>
+  <h2>Forecast curves</h2>
+  {% if chart_svg %}
+    <div class="forecast-chart-wrap">{{ chart_svg | safe }}</div>
+  {% else %}
+    <p class="muted">No chartable rows in forecast.csv.</p>
+  {% endif %}
+  <p class="muted small">
+    <a href="{{ png_url }}" target="_blank" rel="noopener">view embedded forecast.png</a>
+    · <a href="{{ csv_url }}" download>download forecast.csv</a>
+  </p>
+</section>
+
+<section>
+  <h2>Daily values</h2>
+  <div class="forecast-table-wrap">
+    <table class="forecast-table">
+      <thead>
+        <tr>
+          {% for c in columns %}<th>{{ c }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+          <tr>
+            {% for c in columns %}
+              {% set v = r.get(c) %}
+              <td class="{% if c == 'day' or c == 'date' %}cell-key{% endif %}">
+                {% if v is number %}{{ "%.2f"|format(v) }}{% else %}{{ v }}{% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% endblock %}

@@ -2,56 +2,222 @@
 {% block title %}{{ run.ticker }} run · TradingAgents{% endblock %}
 {% block body %}
 <header class="run-header">
-  <h1>{{ run.ticker }} <span class="muted">· {{ run.trade_date }}</span></h1>
-  <div class="meta">
-    Persona: <strong>{{ run.persona or "neutral" }}</strong> ·
-    Status: <span id="status" class="status status-{{ run.status }}">{{ run.status }}</span>
+  <div class="run-title">
+    <h1>{{ run.ticker }} <span class="muted">· {{ run.trade_date }}</span></h1>
+    <p class="muted">
+      Persona: <strong id="persona-label">{{ run.persona or "neutral" }}</strong>
+      · Status: <span id="status" class="status status-{{ run.status }}">{{ run.status }}</span>
+      · Elapsed: <span id="elapsed">0s</span>
+    </p>
+  </div>
+  <div class="run-actions">
+    <button id="cancel-btn" type="button" class="btn-warn">Cancel run</button>
+    <a id="result-link" class="btn hidden" href="#">View full report →</a>
   </div>
 </header>
 
-<section>
-  <h2>Live output</h2>
-  <pre id="stream" class="stream"></pre>
+<section class="stats-grid" id="stats">
+  <div class="stat"><span class="stat-k">LLM calls</span><span class="stat-v" id="stat-llm">0</span></div>
+  <div class="stat"><span class="stat-k">Tool calls</span><span class="stat-v" id="stat-tools">0</span></div>
+  <div class="stat"><span class="stat-k">Tokens in</span><span class="stat-v" id="stat-tokens-in">0</span></div>
+  <div class="stat"><span class="stat-k">Tokens out</span><span class="stat-v" id="stat-tokens-out">0</span></div>
 </section>
 
-<p id="result" class="result hidden">
-  <a id="result-link" href="#">View full report →</a>
-</p>
+<section class="run-grid">
+  <aside class="agents-panel">
+    <h2>Agents</h2>
+    <table class="agents-table">
+      <tbody id="agent-rows">
+        <tr><td colspan="2" class="muted">waiting for first event…</td></tr>
+      </tbody>
+    </table>
+  </aside>
+
+  <article class="current-panel">
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-pane="pane-current" role="tab">Current report</button>
+      <button class="tab" data-pane="pane-activity" role="tab">Activity</button>
+      <button class="tab" data-pane="pane-tools" role="tab">Tool calls</button>
+      <button class="tab" data-pane="pane-raw" role="tab">Raw stream</button>
+    </div>
+
+    <div id="pane-current" class="pane active">
+      <h3 id="current-title" class="muted">No section yet</h3>
+      <pre id="current-body" class="report-pre"></pre>
+    </div>
+
+    <div id="pane-activity" class="pane">
+      <ul id="activity-list" class="activity-list"></ul>
+    </div>
+
+    <div id="pane-tools" class="pane">
+      <ul id="tools-list" class="activity-list"></ul>
+    </div>
+
+    <div id="pane-raw" class="pane">
+      <pre id="stream" class="stream"></pre>
+    </div>
+  </article>
+</section>
 
 <script>
 (function () {
-  const stream = document.getElementById("stream");
-  const status = document.getElementById("status");
-  const result = document.getElementById("result");
-  const link = document.getElementById("result-link");
   const ticker = {{ run.ticker | tojson }};
+  const runId = {{ run.run_id | tojson }};
 
-  const es = new EventSource("/run/{{ run.run_id }}/stream");
+  const els = {
+    status: document.getElementById("status"),
+    elapsed: document.getElementById("elapsed"),
+    personaLabel: document.getElementById("persona-label"),
+    cancel: document.getElementById("cancel-btn"),
+    result: document.getElementById("result-link"),
+    statLlm: document.getElementById("stat-llm"),
+    statTools: document.getElementById("stat-tools"),
+    statTokensIn: document.getElementById("stat-tokens-in"),
+    statTokensOut: document.getElementById("stat-tokens-out"),
+    agentRows: document.getElementById("agent-rows"),
+    currentTitle: document.getElementById("current-title"),
+    currentBody: document.getElementById("current-body"),
+    activity: document.getElementById("activity-list"),
+    tools: document.getElementById("tools-list"),
+    stream: document.getElementById("stream"),
+  };
 
-  es.addEventListener("line", (ev) => {
-    stream.textContent += ev.data + "\n";
-    stream.scrollTop = stream.scrollHeight;
+  // ------ Tabs --------------------------------------------------------------
+  document.querySelectorAll(".tab").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll(".pane").forEach((p) => p.classList.remove("active"));
+      btn.classList.add("active");
+      document.getElementById(btn.dataset.pane).classList.add("active");
+    });
+  });
+
+  // ------ Cancel ------------------------------------------------------------
+  els.cancel.addEventListener("click", async () => {
+    els.cancel.disabled = true;
+    try {
+      await fetch(`/run/${runId}/cancel`, { method: "POST" });
+    } catch (_) {}
+  });
+
+  // ------ Render helpers ----------------------------------------------------
+  const SECTION_TITLES = {
+    market_report: "Market Analysis",
+    sentiment_report: "Social Sentiment",
+    news_report: "News Analysis",
+    fundamentals_report: "Fundamentals Analysis",
+    investment_plan: "Research Team Decision",
+    trader_investment_plan: "Trading Team Plan",
+    final_trade_decision: "Portfolio Management Decision",
+  };
+  const SECTION_ORDER = [
+    "market_report", "sentiment_report", "news_report", "fundamentals_report",
+    "investment_plan", "trader_investment_plan", "final_trade_decision",
+  ];
+
+  function renderAgents(agentStatus, currentAgent) {
+    const order = Object.keys(agentStatus);
+    if (!order.length) return;
+    const rows = order.map((agent) => {
+      const st = agentStatus[agent] || "pending";
+      const isCurrent = agent === currentAgent ? " is-current" : "";
+      return `<tr class="agent-row${isCurrent}">
+        <td>${agent}</td>
+        <td><span class="status status-${st}">${st}</span></td>
+      </tr>`;
+    });
+    els.agentRows.innerHTML = rows.join("");
+  }
+
+  function renderCurrentReport(sections) {
+    let latestKey = null;
+    for (const k of SECTION_ORDER) if (sections && sections[k]) latestKey = k;
+    if (!latestKey) {
+      els.currentTitle.textContent = "No section yet";
+      els.currentBody.textContent = "";
+      return;
+    }
+    els.currentTitle.textContent = SECTION_TITLES[latestKey] || latestKey;
+    els.currentBody.textContent = sections[latestKey];
+  }
+
+  function renderActivity(messages) {
+    if (!messages || !messages.length) return;
+    els.activity.innerHTML = messages.map((m) =>
+      `<li class="activity-item type-${m.type.toLowerCase()}">
+         <span class="muted small">${m.ts}</span>
+         <span class="badge">${m.type}</span>
+         <span class="activity-content">${escapeHtml(m.content || "")}</span>
+       </li>`
+    ).join("");
+  }
+
+  function renderTools(tools) {
+    if (!tools || !tools.length) return;
+    els.tools.innerHTML = tools.map((t) =>
+      `<li class="activity-item">
+         <span class="muted small">${t.ts}</span>
+         <span class="badge">${escapeHtml(t.name)}</span>
+         <span class="activity-content">${escapeHtml(t.args || "")}</span>
+       </li>`
+    ).join("");
+  }
+
+  function renderStats(stats) {
+    if (!stats) return;
+    els.statLlm.textContent = stats.llm_calls ?? 0;
+    els.statTools.textContent = stats.tool_calls ?? 0;
+    els.statTokensIn.textContent = stats.tokens_in ?? 0;
+    els.statTokensOut.textContent = stats.tokens_out ?? 0;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  function applyState(state) {
+    if (!state) return;
+    if (state.persona_label) els.personaLabel.textContent = state.persona_label;
+    if (typeof state.elapsed === "number") {
+      els.elapsed.textContent = state.elapsed + "s";
+    }
+    renderAgents(state.agent_status || {}, state.current_agent);
+    renderCurrentReport(state.report_sections || {});
+    renderActivity(state.messages || []);
+    renderTools(state.tool_calls || []);
+    renderStats(state.stats);
+  }
+
+  // ------ SSE wiring --------------------------------------------------------
+  const es = new EventSource(`/run/${runId}/stream`);
+
+  es.addEventListener("state", (ev) => {
+    try { applyState(JSON.parse(ev.data)); } catch (_) {}
+  });
+
+  es.addEventListener("log", (ev) => {
+    els.stream.textContent += ev.data + "\n";
+    els.stream.scrollTop = els.stream.scrollHeight;
   });
 
   es.addEventListener("done", (ev) => {
     es.close();
-    // payload is "status=done bundle=NAME"
-    const m = /status=(\S+)\s+bundle=(\S*)/.exec(ev.data || "");
-    if (m) {
-      const newStatus = m[1];
-      const bundle = m[2];
-      status.textContent = newStatus;
-      status.className = "status status-" + newStatus;
-      if (newStatus === "done" && bundle) {
-        link.href = "/reports/" + ticker + "?run=" + encodeURIComponent(bundle);
-        result.classList.remove("hidden");
-      }
+    let payload = {};
+    try { payload = JSON.parse(ev.data); } catch (_) {}
+    const newStatus = payload.status || "done";
+    els.status.textContent = newStatus;
+    els.status.className = "status status-" + newStatus;
+    els.cancel.disabled = true;
+    if (newStatus === "done" && payload.bundle_name) {
+      els.result.href = `/reports/${ticker}?run=${encodeURIComponent(payload.bundle_name)}`;
+      els.result.classList.remove("hidden");
     }
   });
 
-  es.onerror = () => {
-    // Browser will retry automatically; nothing to do here.
-  };
+  es.onerror = () => { /* browser auto-reconnects */ };
 })();
 </script>
 {% endblock %}

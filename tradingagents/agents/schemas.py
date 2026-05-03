@@ -403,6 +403,101 @@ class PortfolioDecision(BaseModel):
     )
 
 
+# ---------------------------------------------------------------------------
+# Scenario breakdown — per-ticker headwinds / same / tailwinds factor lists
+# ---------------------------------------------------------------------------
+
+
+ScenarioImpact = Literal["low", "medium", "high"]
+
+
+class ScenarioFactor(BaseModel):
+    """One concrete driver inside a scenario, with its own probability and impact.
+
+    The forecast curves (headwinds / same / tailwinds) describe *what* the
+    price might do; these factors describe *why* — the catalysts a reader
+    should track to know whether the scenario is materializing. Each
+    factor is ticker-specific (no boilerplate).
+    """
+
+    factor: str = Field(
+        description=(
+            "One concrete, ticker-specific driver. Should reference real "
+            "catalysts from the analyst reports (segment growth rates, "
+            "named customers, regulatory items, etc.) — not generic phrases "
+            "like 'macro headwinds'."
+        ),
+    )
+    probability_pct: int = Field(
+        ge=0,
+        le=100,
+        description=(
+            "Subjective probability (0-100) that this factor materializes "
+            "within the next 90 days. Probabilities across factors within a "
+            "scenario do NOT need to sum to 100 — they are independent."
+        ),
+    )
+    impact: ScenarioImpact = Field(
+        description=(
+            "Magnitude of price impact if this factor materializes: 'low' "
+            "(< ~3%), 'medium' (~3-8%), 'high' (> ~8%)."
+        ),
+    )
+    rationale: str = Field(
+        description=(
+            "One sentence explaining how this factor was sourced from the "
+            "analyst debate and why this probability/impact pairing."
+        ),
+    )
+
+
+class ScenarioBreakdown(BaseModel):
+    """Per-ticker, per-scenario factor lists with explicit probabilities.
+
+    Synthesized once per run from the bull/bear/research-manager debate,
+    plus the analyst reports. Saved as ``scenarios.json`` in the bundle and
+    rendered alongside the daily forecast in the webapp.
+    """
+
+    ticker: str = Field(description="Ticker the breakdown applies to.")
+    headwinds_summary: str = Field(
+        description=(
+            "One paragraph: the cohesive bear story for this ticker over "
+            "the next 90 days. Concrete to this name, not generic."
+        ),
+    )
+    headwinds_factors: list[ScenarioFactor] = Field(
+        min_length=3,
+        max_length=6,
+        description="3-6 specific drivers that would push the stock lower.",
+    )
+    same_summary: str = Field(
+        description=(
+            "One paragraph: the base case where the stock chops sideways "
+            "or matches the broader market. What status-quo conditions hold?"
+        ),
+    )
+    same_factors: list[ScenarioFactor] = Field(
+        min_length=3,
+        max_length=6,
+        description=(
+            "3-6 conditions whose persistence keeps the stock roughly flat "
+            "(neither catalyst nor crisis)."
+        ),
+    )
+    tailwinds_summary: str = Field(
+        description=(
+            "One paragraph: the cohesive bull story for this ticker over "
+            "the next 90 days. Concrete to this name, not generic."
+        ),
+    )
+    tailwinds_factors: list[ScenarioFactor] = Field(
+        min_length=3,
+        max_length=6,
+        description="3-6 specific drivers that would push the stock higher.",
+    )
+
+
 def render_pm_decision(decision: PortfolioDecision) -> str:
     """Render a PortfolioDecision back to the markdown shape the rest of the system expects.
 

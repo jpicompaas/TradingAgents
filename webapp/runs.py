@@ -1,23 +1,33 @@
-"""Spawn ``main.py`` as a subprocess and stream its stdout to the webapp.
+"""Spawn the trading-agents graph runner and pump structured events to the webapp.
 
-Single-process MVP — runs are kept in an in-memory dict keyed by run_id.
-A subprocess inherits the webapp's environment plus the user's
-ticker/date/persona overrides so we don't have to depend on the
-trading-agents graph internals from the web layer. The subprocess
-writes its bundle to the same ``trading-reports/`` directory the
-browser views.
+Each ``Run`` owns a subprocess (``python -m webapp.run_with_events``) and an
+asyncio queue of events. The runner emits two flavors of stdout:
+
+    EVENT|<json>      — structured snapshot consumed by the live progress UI
+    <other text>      — captured as a log line (Groq retries, "Report saved
+                        to: ..." line, traceback frames, etc)
+
+Both flavors are forwarded to subscribers as SSE events so the browser can
+render either or both.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import secrets
+import signal
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
+
+
+# Ship at most this many recent log lines back to a late-joining client to
+# avoid blowing up the SSE replay payload on long runs.
+MAX_REPLAY_LINES = 400
 
 
 @dataclass
@@ -28,10 +38,13 @@ class Run:
     persona: str
     started_at: float
     proc: subprocess.Popen
-    queue: "asyncio.Queue[Optional[str]]"
+    queue: "asyncio.Queue[Optional[dict]]"
     lines: list[str] = field(default_factory=list)
-    status: str = "running"  # "running" | "done" | "failed"
-    bundle_name: Optional[str] = None  # set when we detect "Report saved to:"
+    events: list[dict] = field(default_factory=list)  # ordered raw events
+    state: dict = field(default_factory=dict)         # latest structured snapshot
+    status: str = "running"                           # running | done | failed | cancelled
+    bundle_name: Optional[str] = None
+    error: Optional[str] = None
 
 
 _RUNS: dict[str, Run] = {}
@@ -53,7 +66,7 @@ async def start_run(
     *,
     cwd: str = ".",
 ) -> Run:
-    """Spawn ``python main.py`` with the requested env and return the Run handle."""
+    """Spawn the runner subprocess with the requested env and return the Run handle."""
     run_id = secrets.token_hex(4)
 
     env = os.environ.copy()
@@ -66,7 +79,7 @@ async def start_run(
     env["PYTHONUNBUFFERED"] = "1"
 
     proc = subprocess.Popen(
-        [sys.executable, "main.py"],
+        [sys.executable, "-m", "webapp.run_with_events"],
         cwd=cwd,
         env=env,
         stdout=subprocess.PIPE,
@@ -90,7 +103,7 @@ async def start_run(
 
 
 async def _pump_output(run: Run) -> None:
-    """Drain the subprocess stdout into the run's queue and detect completion."""
+    """Drain subprocess stdout, classify each line, and broadcast events."""
     loop = asyncio.get_running_loop()
     assert run.proc.stdout is not None
 
@@ -102,34 +115,107 @@ async def _pump_output(run: Run) -> None:
         if not line:
             break
         line = line.rstrip("\n")
-        run.lines.append(line)
-        # Detect the "Report saved to: /home/.../trading-reports/<NAME>" line
-        # so the UI can link to the finished bundle even though the process
-        # writes paths from inside the container.
-        if "Report saved to:" in line:
-            tail = line.split("Report saved to:", 1)[1].strip()
-            run.bundle_name = tail.rstrip("/").split("/")[-1]
-        await run.queue.put(line)
+
+        if line.startswith("EVENT|"):
+            payload = line[len("EVENT|"):]
+            try:
+                evt = json.loads(payload)
+            except json.JSONDecodeError:
+                # Malformed event — fall through and treat as a log line.
+                run.lines.append(line)
+                await run.queue.put({"kind": "log", "data": line})
+                continue
+            _apply_event(run, evt)
+            run.events.append(evt)
+            await run.queue.put({"kind": "event", "data": evt})
+        else:
+            run.lines.append(line)
+            # Belt-and-suspenders: also pick the bundle name out of the
+            # human-readable line in case the EVENT|done was missed.
+            if "Report saved to:" in line and not run.bundle_name:
+                tail = line.split("Report saved to:", 1)[1].strip()
+                run.bundle_name = tail.rstrip("/").split("/")[-1]
+            await run.queue.put({"kind": "log", "data": line})
 
     rc = await loop.run_in_executor(None, run.proc.wait)
-    run.status = "done" if rc == 0 else "failed"
-    await run.queue.put(None)  # sentinel
+    if run.status == "running":  # not already cancelled / errored
+        run.status = "done" if rc == 0 else "failed"
+    await run.queue.put(None)  # sentinel — close the stream
+
+
+def _apply_event(run: Run, evt: dict) -> None:
+    """Update the Run's mirrored state from a structured event."""
+    kind = evt.get("event")
+    if kind == "start":
+        run.state = {
+            "agent_status": evt.get("agent_status", {}),
+            "report_sections": {},
+            "messages": [],
+            "tool_calls": [],
+            "stats": {"llm_calls": 0, "tool_calls": 0, "tokens_in": 0, "tokens_out": 0},
+            "elapsed": 0,
+            "persona_label": evt.get("persona_label", ""),
+            "selected_analysts": evt.get("selected_analysts", []),
+        }
+    elif kind == "state":
+        # Replace fields wholesale — the runner sends a fresh full snapshot.
+        for key in (
+            "agent_status",
+            "report_sections",
+            "messages",
+            "tool_calls",
+            "stats",
+            "elapsed",
+            "persona_label",
+            "current_agent",
+        ):
+            if key in evt:
+                run.state[key] = evt[key]
+    elif kind == "done":
+        if evt.get("bundle_name"):
+            run.bundle_name = evt["bundle_name"]
+        if "stats" in evt:
+            run.state["stats"] = evt["stats"]
+        if evt.get("cancelled"):
+            run.status = "cancelled"
+    elif kind == "error":
+        run.error = evt.get("message")
+
+
+def cancel_run(run: Run) -> bool:
+    """Send SIGTERM to a running subprocess. Returns True if we sent it."""
+    if run.status != "running" or run.proc.poll() is not None:
+        return False
+    try:
+        run.proc.send_signal(signal.SIGTERM)
+    except ProcessLookupError:
+        return False
+    run.status = "cancelled"
+    return True
 
 
 async def stream_run(run: Run) -> AsyncIterator[str]:
     """Yield SSE-formatted events for one Run.
 
-    On reconnect, replays buffered lines first so the page can recover
-    if the user reloaded mid-run.
+    On (re)connect, replays buffered state + recent lines so a refresh
+    mid-run doesn't lose history.
     """
-    # Replay anything we've already produced (so refreshes don't lose history).
-    for line in list(run.lines):
-        yield _sse("line", line)
+    # Replay current state first so the page paints immediately.
+    if run.state:
+        yield _sse("state", json.dumps(run.state))
+    for line in run.lines[-MAX_REPLAY_LINES:]:
+        yield _sse("log", line)
 
     if run.status != "running":
         yield _sse(
             "done",
-            f"status={run.status} bundle={run.bundle_name or ''}",
+            json.dumps(
+                {
+                    "status": run.status,
+                    "bundle_name": run.bundle_name or "",
+                    "error": run.error,
+                }
+            ),
         )
         return
 
@@ -138,12 +224,37 @@ async def stream_run(run: Run) -> AsyncIterator[str]:
         if item is None:
             yield _sse(
                 "done",
-                f"status={run.status} bundle={run.bundle_name or ''}",
+                json.dumps(
+                    {
+                        "status": run.status,
+                        "bundle_name": run.bundle_name or "",
+                        "error": run.error,
+                    }
+                ),
             )
             return
-        yield _sse("line", item)
+        if item["kind"] == "log":
+            yield _sse("log", item["data"])
+        else:
+            yield _sse("state", json.dumps(item["data"]))
+
+
+def snapshot(run: Run) -> dict[str, Any]:
+    """Plain-dict view of a run for JSON endpoints."""
+    return {
+        "run_id": run.run_id,
+        "ticker": run.ticker,
+        "trade_date": run.trade_date,
+        "persona": run.persona,
+        "started_at": run.started_at,
+        "status": run.status,
+        "bundle_name": run.bundle_name,
+        "error": run.error,
+        "state": run.state,
+    }
 
 
 def _sse(event: str, data: str) -> str:
-    # Multi-line data must be re-prefixed; data is single-line for our usage.
+    # SSE requires multi-line payloads to be re-prefixed with "data:" on
+    # each line; our state JSON is single-line so a single "data:" works.
     return f"event: {event}\ndata: {data}\n\n"
