@@ -71,6 +71,10 @@ class AgentState(MessagesState):
     ]
     final_trade_decision: Annotated[str, "Final decision made by the Risk Analysts"]
     past_context: Annotated[str, "Memory log context injected at run start (same-ticker decisions + cross-ticker lessons)"]
+    peer_valuations: Annotated[
+        str,
+        "Markdown table of peer trailing PE / forward PE / P/S / PEG / market cap, fetched once at run start and read by Bull/Bear researchers for relative-valuation analysis.",
+    ]
     pm_levels: Annotated[
         dict,
         "Structured LevelEstimates dict from the Portfolio Manager (state-change levels + +30/+60/+90d horizon estimates), used to drive the three-flavor forecast.",

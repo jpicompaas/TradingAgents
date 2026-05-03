@@ -11,6 +11,7 @@ def create_bull_researcher(llm):
         sentiment_report = state["sentiment_report"]
         news_report = state["news_report"]
         fundamentals_report = state["fundamentals_report"]
+        peer_valuations = state.get("peer_valuations") or "_(peer-valuation table unavailable; reason qualitatively, do not invent peer ratios)_"
 
         prompt = f"""You are a Bull Analyst advocating for investing in the stock. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
 
@@ -21,8 +22,25 @@ Key points to focus on:
 - Bear Counterpoints: Critically analyze the bear argument with specific data and sound reasoning, addressing concerns thoroughly and showing why the bull perspective holds stronger merit.
 - Engagement: Present your argument in a conversational style, engaging directly with the bear analyst's points and debating effectively rather than just listing data.
 
-REQUIRED OUTPUT FORMAT:
-End your response with a Markdown section titled exactly `## Required Assumptions for the Bull Case`. Under it, enumerate the load-bearing assumptions that MUST hold for this thesis to play out. Be explicit and falsifiable — for each, state the assumed condition AND the observable signal that would invalidate it. Cover, at minimum:
+REQUIRED OUTPUT FORMAT — your response MUST contain TWO closing sections, in this order:
+
+**`## Relative Valuation vs Peers`**
+Use the peer-valuation table below. Cite at least three specific peer
+ratios verbatim from the table (trailing PE, forward PE, P/S, or PEG —
+whichever support your case). Argue why the target's multiple is
+justified or attractive *in light of* the peer set — premium for
+moat/growth, discount for cyclicality, etc. **Cite ONLY numbers that
+appear in the peer-valuation table below; do not pull peer ratios from
+your training data, and do not reuse numbers from this prompt's
+instructions.** If the table says peer data is unavailable, say so
+explicitly and pivot to the target's own historical multiples — do not
+fabricate peer ratios.
+
+**`## Required Assumptions for the Bull Case`**
+Enumerate the load-bearing assumptions that MUST hold for this thesis to
+play out. Be explicit and falsifiable — for each, state the assumed
+condition AND the observable signal that would invalidate it. Cover, at
+minimum:
 - **Inflation regime** (e.g. "headline CPI stays below X%; sticky services inflation eases")
 - **Interest-rate path** (e.g. "Fed funds path ≤ Y by end of period; no surprise hikes")
 - **Geopolitical / war risk** (e.g. "no new major conflict that disrupts company's supply chain or end markets; existing conflicts do not escalate")
@@ -31,6 +49,9 @@ End your response with a Markdown section titled exactly `## Required Assumption
 - **FX exposure** (if revenues are non-USD)
 - **Company-specific operational milestones** (product launches, margin expansion, customer wins)
 - **Liquidity & funding** (no need to raise capital at unfavorable terms within the horizon)
+
+Peer-valuation snapshot (yfinance, real-time):
+{peer_valuations}
 
 Resources available:
 Market research report: {market_research_report}

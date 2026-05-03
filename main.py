@@ -24,8 +24,8 @@ config["data_vendors"] = {
     "news_data": "yfinance",                 # Options: alpha_vantage, yfinance
 }
 
-TICKER = "TWLO"
-TRADE_DATE = "2026-05-02"
+TICKER = "MSFT"
+TRADE_DATE = "2026-05-03"
 
 # Initialize with custom config
 ta = TradingAgentsGraph(debug=False, config=config)

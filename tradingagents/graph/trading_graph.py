@@ -297,10 +297,22 @@ class TradingAgentsGraph:
 
     def _run_graph(self, company_name, trade_date):
         """Execute the graph and write the resulting state to disk and memory log."""
-        # Initialize state — inject memory log context for PM.
+        # Initialize state — inject memory log context for PM and peer
+        # valuations for the Bull/Bear researchers (so their relative-
+        # valuation arguments are anchored in real PE/Forward PE numbers
+        # rather than LLM training-data recall).
         past_context = self.memory_log.get_past_context(company_name)
+        from tradingagents.dataflows.peers import get_peer_valuations
+        try:
+            peer_valuations = get_peer_valuations(company_name)
+        except Exception as exc:
+            logger.warning("peer-valuations fetch failed for %s: %s", company_name, exc)
+            peer_valuations = ""
         init_agent_state = self.propagator.create_initial_state(
-            company_name, trade_date, past_context=past_context
+            company_name,
+            trade_date,
+            past_context=past_context,
+            peer_valuations=peer_valuations,
         )
         args = self.propagator.get_graph_args()
 

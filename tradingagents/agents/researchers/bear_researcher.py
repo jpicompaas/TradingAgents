@@ -11,6 +11,7 @@ def create_bear_researcher(llm):
         sentiment_report = state["sentiment_report"]
         news_report = state["news_report"]
         fundamentals_report = state["fundamentals_report"]
+        peer_valuations = state.get("peer_valuations") or "_(peer-valuation table unavailable; reason qualitatively, do not invent peer ratios)_"
 
         prompt = f"""You are a Bear Analyst making the case against investing in the stock. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
 
@@ -22,8 +23,25 @@ Key points to focus on:
 - Bull Counterpoints: Critically analyze the bull argument with specific data and sound reasoning, exposing weaknesses or over-optimistic assumptions.
 - Engagement: Present your argument in a conversational style, directly engaging with the bull analyst's points and debating effectively rather than simply listing facts.
 
-REQUIRED OUTPUT FORMAT:
-End your response with a Markdown section titled exactly `## Required Assumptions for the Bear Case`. Under it, enumerate the load-bearing assumptions that MUST hold for the downside thesis to play out. Be explicit and falsifiable — for each, state the assumed condition AND the observable signal that would invalidate it (i.e. force you to abandon the bear case). Cover, at minimum:
+REQUIRED OUTPUT FORMAT — your response MUST contain TWO closing sections, in this order:
+
+**`## Relative Valuation vs Peers`**
+Use the peer-valuation table below. Cite at least three specific peer
+ratios verbatim from the table (trailing PE, forward PE, P/S, or PEG —
+whichever expose the stretch). Argue why the target's multiple is
+*stretched* relative to peers — a richer multiple needs a richer story,
+and any disappointment compresses faster from a high base. **Cite ONLY
+numbers that appear in the peer-valuation table below; do not pull peer
+ratios from your training data, and do not reuse numbers from this
+prompt's instructions.** If the table says peer data is unavailable, say
+so explicitly and pivot to the target's own historical multiples — do
+not fabricate peer ratios.
+
+**`## Required Assumptions for the Bear Case`**
+Enumerate the load-bearing assumptions that MUST hold for the downside
+thesis to play out. Be explicit and falsifiable — for each, state the
+assumed condition AND the observable signal that would invalidate it
+(i.e. force you to abandon the bear case). Cover, at minimum:
 - **Inflation regime** (e.g. "inflation stays elevated, compressing multiples")
 - **Interest-rate path** (e.g. "rates stay higher for longer; cost of capital remains a headwind")
 - **Geopolitical / war risk** (e.g. "ongoing or escalating conflicts that hit demand or supply")
@@ -32,6 +50,9 @@ End your response with a Markdown section titled exactly `## Required Assumption
 - **FX exposure** (if revenues are non-USD)
 - **Company-specific execution risk** (missed milestones, margin pressure, churn)
 - **Liquidity & funding** (debt maturity walls, dilution risk)
+
+Peer-valuation snapshot (yfinance, real-time):
+{peer_valuations}
 
 Resources available:
 
