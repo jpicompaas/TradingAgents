@@ -99,17 +99,43 @@ def _snapshot(
 
 
 def main() -> int:
-    ticker = os.environ.get("TRADINGAGENTS_TICKER", "AMZN").strip().upper()
+    ticker = os.environ.get("TRADINGAGENTS_TICKER", "TWLO").strip().upper()
     trade_date = os.environ.get("TRADINGAGENTS_TRADE_DATE", "2026-05-03").strip()
 
     config = DEFAULT_CONFIG.copy()
-    # Mirror main.py defaults — Groq stays the cheap clone-and-run path.
+    # Settings can be overridden by env vars set from the webapp form. The
+    # defaults match DEFAULT_CONFIG so a no-args run behaves identically.
     config["llm_provider"] = os.environ.get(
         "TRADINGAGENTS_LLM_PROVIDER", config.get("llm_provider", "groq")
     ).lower()
-    config["max_debate_rounds"] = int(os.environ.get("TRADINGAGENTS_DEBATE_ROUNDS", 1))
+    if os.environ.get("TRADINGAGENTS_DEEP_LLM"):
+        config["deep_think_llm"] = os.environ["TRADINGAGENTS_DEEP_LLM"]
+    if os.environ.get("TRADINGAGENTS_QUICK_LLM"):
+        config["quick_think_llm"] = os.environ["TRADINGAGENTS_QUICK_LLM"]
+    config["max_debate_rounds"] = int(
+        os.environ.get("TRADINGAGENTS_DEBATE_ROUNDS")
+        or os.environ.get("TRADINGAGENTS_MAX_DEBATE_ROUNDS")
+        or config.get("max_debate_rounds", 1)
+    )
+    config["max_risk_discuss_rounds"] = int(
+        os.environ.get("TRADINGAGENTS_MAX_RISK_ROUNDS")
+        or config.get("max_risk_discuss_rounds", 1)
+    )
+    if os.environ.get("TRADINGAGENTS_OUTPUT_LANGUAGE"):
+        config["output_language"] = os.environ["TRADINGAGENTS_OUTPUT_LANGUAGE"]
 
-    selected_analysts = ["market", "social", "news", "fundamentals"]
+    # Analysts: comma-separated list (e.g. "market,social,news,fundamentals").
+    # Default to all four to match the historical behavior.
+    raw_analysts = os.environ.get("TRADINGAGENTS_ANALYSTS", "")
+    if raw_analysts.strip():
+        selected_analysts = [
+            a.strip().lower() for a in raw_analysts.split(",") if a.strip()
+        ]
+        # Filter to known keys to avoid garbage in.
+        valid = {"market", "social", "news", "fundamentals"}
+        selected_analysts = [a for a in selected_analysts if a in valid]
+    if not selected_analysts:
+        selected_analysts = ["market", "social", "news", "fundamentals"]
     stats = StatsCallbackHandler()
 
     graph = TradingAgentsGraph(
@@ -134,6 +160,15 @@ def main() -> int:
             "persona_label": buf.persona_label,
             "selected_analysts": selected_analysts,
             "agent_status": dict(buf.agent_status),
+            "settings": {
+                "llm_provider": config["llm_provider"],
+                "deep_think_llm": config["deep_think_llm"],
+                "quick_think_llm": config["quick_think_llm"],
+                "max_debate_rounds": config["max_debate_rounds"],
+                "max_risk_discuss_rounds": config["max_risk_discuss_rounds"],
+                "output_language": config.get("output_language", "English"),
+                "data_vendors": config.get("data_vendors", {}),
+            },
         },
     )
 

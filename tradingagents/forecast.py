@@ -1,37 +1,53 @@
-"""Three-flavor (headwinds / same / tailwinds) forward-price forecast.
+"""GARCH(1,1)-t Monte Carlo forecast — three-flavor (headwinds / same / tailwinds).
 
-Design (post-realism overhaul):
+References (see ``/references`` in the webapp for full bibliography):
 
-- **Same** — anchored at the Portfolio Manager's ``expected`` price at
-  +30 / +60 / +90 days, log-linearly interpolated from today's close.
-  If the PM didn't emit a number for some horizon, that horizon falls
-  back to today's close (flat assumption) — we never silently disappear.
-- **Headwinds** — a *real* bearish scenario. For each horizon we take
-  ``min(PM.low, today × exp(-k·σ·√(days/252)))`` so the bear path can
-  drop below today even when the LLM's whole view is bullish. ``σ`` is
-  the annualized realized volatility from the trailing year of OHLCV.
-- **Tailwinds** — symmetric: ``max(PM.high, today × exp(+k·σ·√(days/252)))``.
+  - Bollerslev (1986) — Generalized Autoregressive Conditional Heteroskedasticity
+  - Bollerslev (1987) — A conditionally heteroskedastic time series model for
+    speculative prices [Student-t innovations]
+  - Glosten, Jagannathan, Runkle (1993) — leverage-effect GARCH (GJR)
+  - Cont (2001) — Empirical properties of asset returns: stylized facts
+  - Andersen, Bollerslev, Diebold, Labys (2001) — realized volatility
 
-The result: even if the LLM is unanimously bullish (persona-skewed,
-recency-biased, training-data-dated), the headwinds curve still
-reflects the vol-implied downside the *market* would generate, not the
-LLM's softened version. ±1σ bands around each curve widen with √t
-using the same realized-vol number, so the displayed uncertainty
-matches the stock's actual recent volatility.
+Why this replaces ``today × exp(±k·σ·√t)``: the prior model assumed constant
+volatility and a deterministic envelope, which contradicts the single most
+robust stylized fact about equity returns — volatility clusters (Cont 2001).
+GARCH directly models that clustering; Student-t innovations (Bollerslev 1987)
+capture the fat tails that a Gaussian model under-represents in the bear case.
 
-Outputs in the report bundle directory:
-- ``forecast.csv`` — daily rows with all three paths and their ±1σ bands
-- ``forecast.png`` — fan chart visualizing all three (matplotlib, optional)
-- A summary block injected into ``complete_report.md``
+Pipeline:
 
-Always emits a forecast when historical OHLCV is available — even if
-the PM left every horizon unset (in which case the curves are pure
-vol-driven scenarios from today's close).
+  1. Fit GARCH(1,1)-t on ~1y daily log returns. With ``GARCH_LEVERAGE=1`` the
+     fit becomes GJR-GARCH-t to capture the leverage effect (vol asymmetry —
+     equities drop faster than they recover).
+  2. Forecast 90 days of conditional variance via Monte Carlo simulation
+     (``arch.forecast(method='simulation', simulations=N)``).
+  3. Optional drift adjustment: when the Portfolio Manager's ``expected`` at
+     +90d is within ±50% of today's close, shift simulated returns by a
+     constant ``δ`` so the median path lands on that target. This preserves
+     the prior "same = LLM-anchored" behavior without contaminating the
+     vol-driven dispersion of the bull/bear curves.
+  4. Compute per-day percentiles. Each scenario gets a central percentile
+     plus an inner-percentile uncertainty band:
+
+       Scenario   path   low    high
+       headwinds  P10    P2.5   P25
+       same       P50    P25    P75
+       tailwinds  P90    P75    P97.5
+
+  Bands have probabilistic meaning: the bear ``low`` is the 2.5th-percentile
+  path — only a 2.5% chance of finishing below it under the fitted model.
+
+Outputs (unchanged contract — drop-in replacement):
+  - ``forecast.csv`` — daily rows with all three paths and their bands
+  - ``forecast.png`` — fan chart visualizing the three scenarios + bands
+  - A summary block injected into ``complete_report.md``
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -42,24 +58,38 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
-_SCENARIOS = (
-    ("headwinds", "low", "#cc4444"),
-    ("same", "expected", "#666666"),
-    ("tailwinds", "high", "#229922"),
-)
+# ---------------------------------------------------------------------------
+# Forecast configuration
+# ---------------------------------------------------------------------------
 
-# Stress applied to the vol-implied bear/bull floors, in σ-units. 1.0 ≈
-# one standard deviation of the trailing-year log returns. Bigger = more
-# pessimistic/optimistic vol-floor for headwinds / vol-ceiling for tailwinds.
-_VOL_STRESS_K = 1.0
+# Forecast horizon (days). The CSV always covers 0..MAX_HORIZON inclusive.
+MAX_HORIZON = 90
 
-# Forecast horizons we project to (days). Always include +90 even if the
-# PM only filled some of the earlier ones.
-_HORIZONS = (30, 60, 90)
+# Number of Monte Carlo paths. 5000 is enough for stable percentile
+# estimates at 90d horizon while still finishing in <2s on a laptop.
+DEFAULT_N_SIMS = 5000
+
+# Per-scenario percentile choices — see module docstring.
+_SCENARIO_PERCENTILES: dict[str, tuple[float, float, float]] = {
+    "headwinds": (2.5, 10.0, 25.0),    # (low, central, high)
+    "same":      (25.0, 50.0, 75.0),
+    "tailwinds": (75.0, 90.0, 97.5),
+}
+
+_SCENARIO_COLORS = {
+    "headwinds": "#cc4444",
+    "same":      "#666666",
+    "tailwinds": "#229922",
+}
+
+
+# ---------------------------------------------------------------------------
+# Data
+# ---------------------------------------------------------------------------
 
 
 def _fetch_history(ticker: str, end_date: str, lookback_days: int = 365) -> Optional[pd.DataFrame]:
-    """Pull ~1 year of daily OHLCV ending on ``end_date`` from yfinance.
+    """Pull ~1y of daily OHLCV ending on ``end_date`` from yfinance.
 
     Returns None on any failure — forecast generation is best-effort and
     must never crash the report bundle.
@@ -69,7 +99,6 @@ def _fetch_history(ticker: str, end_date: str, lookback_days: int = 365) -> Opti
     except ImportError:
         logger.info("forecast: yfinance not installed; skipping forecast")
         return None
-
     try:
         end = datetime.strptime(end_date, "%Y-%m-%d")
         start = end - timedelta(days=lookback_days + 30)
@@ -90,34 +119,18 @@ def _fetch_history(ticker: str, end_date: str, lookback_days: int = 365) -> Opti
         return None
 
 
-def _piecewise_log_path(
-    last_close: float, anchors: list[tuple[int, float]], days_max: int
-) -> np.ndarray:
-    """Log-linearly interpolate a price path from day 0 (last_close) through anchors."""
-    if not anchors:
-        return np.array([last_close])
-    sorted_anchors = sorted(anchors)
-    x = np.array([0] + [a[0] for a in sorted_anchors])
-    y = np.log(np.array([last_close] + [a[1] for a in sorted_anchors]))
-    grid = np.arange(0, days_max + 1)
-    return np.exp(np.interp(grid, x, y))
-
-
-def _bands(path: np.ndarray, daily_sigma: float) -> tuple[np.ndarray, np.ndarray]:
-    """1σ confidence bands widening with √t."""
-    days = np.arange(len(path))
-    sigma_t = daily_sigma * np.sqrt(days)
-    return path * np.exp(-sigma_t), path * np.exp(+sigma_t)
+# ---------------------------------------------------------------------------
+# Drift adjustment toward the LLM's central view
+# ---------------------------------------------------------------------------
 
 
 def _llm_value(
     levels: Optional[Mapping[str, Any]], horizon_days: int, attr: str
 ) -> Optional[float]:
-    """Extract the LLM's value for one horizon × scenario, or None."""
+    """Extract the LLM's value for one horizon × attribute, or None."""
     if not levels:
         return None
-    key = f"estimate_{horizon_days}d"
-    est = levels.get(key)
+    est = levels.get(f"estimate_{horizon_days}d")
     if not est:
         return None
     val = est.get(attr)
@@ -129,64 +142,110 @@ def _llm_value(
         return None
 
 
-def _vol_floor(today: float, days: int, daily_sigma: float, sign: float) -> float:
-    """Vol-implied price level at ``days`` from today.
+def _llm_drift_target(
+    last_close: float, levels: Optional[Mapping[str, Any]]
+) -> Optional[float]:
+    """Daily log-return drift δ that lands the median on PM's expected_90d.
 
-    sign = -1 for the bearish floor, +1 for the bullish ceiling.
-    Uses geometric-Brownian-motion-style drift: today × exp(sign·k·σ·√t).
+    Returns None if no usable LLM expected exists, or if the value is
+    implausible (>50% off today's close — typically stale training-data
+    prices).
     """
-    return today * float(np.exp(sign * _VOL_STRESS_K * daily_sigma * np.sqrt(days)))
+    expected = _llm_value(levels, MAX_HORIZON, "expected")
+    if expected is None:
+        # Fall back to +60d, then +30d.
+        for h in (60, 30):
+            v = _llm_value(levels, h, "expected")
+            if v is not None and 0.5 * last_close <= v <= 2.0 * last_close:
+                return float(np.log(v / last_close)) / float(h)
+        return None
+    if not (0.5 * last_close <= expected <= 2.0 * last_close):
+        return None
+    return float(np.log(expected / last_close)) / float(MAX_HORIZON)
 
 
-def _build_anchors(
-    today: float,
-    daily_sigma: float,
-    levels: Optional[Mapping[str, Any]],
-) -> dict[str, list[tuple[int, float]]]:
-    """Build (days, anchor_price) pairs for each of the three scenarios.
+# ---------------------------------------------------------------------------
+# GARCH-MC core
+# ---------------------------------------------------------------------------
 
-    Honest realism rules:
 
-    - **Same**: log-linear from today through PM's ``expected`` at +30 /
-      +60 / +90 days. If a horizon's expected is missing, that horizon
-      falls back to today (flat). If PM's expected is wildly stale
-      (>50% gap vs today's close — typical when the LLM uses its
-      training-data price for the ticker), we treat it as unreliable
-      and fall back to today.
-    - **Headwinds**: pure vol-floor — ``today × exp(-k·σ·√t)``. The
-      LLM's ``low`` is *ignored* because it's almost always anchored
-      on the LLM's central view rather than a real downside scenario,
-      and is also vulnerable to stale training-data prices.
-    - **Tailwinds**: pure vol-ceiling — symmetric.
+def _garch_simulate(
+    log_returns: np.ndarray,
+    n_sims: int,
+    horizon: int,
+    use_leverage: bool,
+) -> Optional[np.ndarray]:
+    """Fit GARCH(1,1)-t (or GJR-GARCH-t) and return ``(n_sims, horizon)``
+    array of simulated daily log returns (decimal scale).
 
-    Net: the central path reflects the LLM's directional view (when
-    plausible), and the bear/bull cases reflect the stock's actual
-    realized volatility regardless of LLM bias.
+    Returns None on any failure so the caller can fall back to a plain
+    historical-vol Monte Carlo.
     """
-    anchors: dict[str, list[tuple[int, float]]] = {
-        "headwinds": [],
-        "same": [],
-        "tailwinds": [],
-    }
+    try:
+        from arch import arch_model
+    except ImportError:
+        logger.info("forecast: 'arch' not installed; falling back to historical-vol MC")
+        return None
 
-    for days in _HORIZONS:
-        # Same — LLM expected if it's plausible, else flat at today.
-        expected = _llm_value(levels, days, "expected")
-        same_val = today
-        if expected is not None and 0.5 * today <= expected <= 2.0 * today:
-            same_val = expected
-        anchors["same"].append((days, same_val))
+    # arch optimizes much more stably when returns are scaled into the
+    # "≈ 1 in magnitude" range — pass percentage returns and rescale on
+    # the way out. (See Sheppard's documentation; standard practice.)
+    pct = log_returns * 100.0
 
-        # Headwinds — pure vol-floor (no LLM input).
-        anchors["headwinds"].append(
-            (days, _vol_floor(today, days, daily_sigma, sign=-1.0))
+    try:
+        model = arch_model(
+            pct,
+            mean="Constant",
+            vol="GARCH",
+            p=1,
+            o=1 if use_leverage else 0,
+            q=1,
+            dist="t",
+            rescale=False,
         )
-        # Tailwinds — pure vol-ceiling (no LLM input).
-        anchors["tailwinds"].append(
-            (days, _vol_floor(today, days, daily_sigma, sign=+1.0))
-        )
+        fit = model.fit(disp="off", show_warning=False)
+    except Exception as exc:
+        logger.warning("forecast: GARCH fit failed (%s); falling back", exc)
+        return None
 
-    return anchors
+    try:
+        fcast = fit.forecast(
+            horizon=horizon,
+            method="simulation",
+            simulations=n_sims,
+            reindex=False,
+        )
+        # `simulations.values` shape: (1, n_sims, horizon)
+        sims_pct = np.asarray(fcast.simulations.values)[0]
+    except Exception as exc:
+        logger.warning("forecast: GARCH simulation failed (%s); falling back", exc)
+        return None
+
+    return sims_pct / 100.0  # back to decimal log-return scale
+
+
+def _historical_vol_simulate(
+    log_returns: np.ndarray, n_sims: int, horizon: int
+) -> np.ndarray:
+    """Constant-σ Monte Carlo fallback: t-distributed iid daily returns.
+
+    Used when GARCH is unavailable or the fit fails. Loses vol clustering
+    but preserves the percentile-based scenario interpretation.
+    """
+    sigma = float(np.std(log_returns, ddof=1))
+    # Use Student-t with 6 d.o.f. — a reasonable default for daily equity
+    # returns per Bollerslev (1987); not estimated to keep the fallback fast.
+    rng = np.random.default_rng(seed=42)
+    df = 6
+    eps = rng.standard_t(df=df, size=(n_sims, horizon))
+    # Standardize so var(eps) = 1 (Student-t variance is df/(df-2)).
+    eps *= float(np.sqrt((df - 2) / df))
+    return eps * sigma
+
+
+# ---------------------------------------------------------------------------
+# Public entry
+# ---------------------------------------------------------------------------
 
 
 def generate_three_flavor_forecast(
@@ -194,68 +253,77 @@ def generate_three_flavor_forecast(
     analysis_date: str,
     levels: Optional[Mapping[str, Any]],
     output_dir: Path,
+    n_sims: int = DEFAULT_N_SIMS,
 ) -> Optional[dict]:
     """Produce headwinds / same / tailwinds forecast curves and persist them.
 
-    Returns a metadata dict on success (paths to outputs, vol stats),
-    or None when there is nothing to forecast — typically because the
-    Portfolio Manager left the +30/+60/+90 estimates unset, or because
-    historical OHLCV could not be fetched.
+    Returns a metadata dict on success or None when there is nothing to
+    forecast (typically yfinance returned no usable history).
     """
     history = _fetch_history(ticker, analysis_date)
-    if history is None or len(history) < 30:
+    if history is None or len(history) < 60:
         logger.info("forecast: insufficient history for %s; skipping", ticker)
         return None
 
     last_close = float(history["Close"].iloc[-1])
-    log_returns = np.log(history["Close"]).diff().dropna()
-    daily_sigma = float(log_returns.std())
+    log_returns = np.log(history["Close"]).diff().dropna().to_numpy()
+    realized_daily_sigma = float(np.std(log_returns, ddof=1))
 
-    # Build realistic per-scenario anchors (honest bear/bull from realized
-    # vol; LLM's `expected` only shapes the central case).
-    anchors_by_scenario = _build_anchors(last_close, daily_sigma, levels)
+    use_leverage = os.environ.get("GARCH_LEVERAGE", "").lower() in ("1", "true", "yes")
+    horizon = MAX_HORIZON
 
-    paths: dict[str, dict] = {}
-    for scenario, _attr, color in _SCENARIOS:
-        anchors = anchors_by_scenario.get(scenario) or []
-        if not anchors:
-            continue
-        max_day = max(d for d, _ in anchors)
-        path = _piecewise_log_path(last_close, anchors, max_day)
-        lower, upper = _bands(path, daily_sigma)
+    # 1. GARCH-MC, with constant-vol fallback so the run never empty-handed.
+    sim_returns = _garch_simulate(log_returns, n_sims, horizon, use_leverage)
+    method = "garch_t"
+    if sim_returns is None:
+        sim_returns = _historical_vol_simulate(log_returns, n_sims, horizon)
+        method = "historical_vol_t"
+
+    # 2. Drift adjustment toward the LLM's expected (only the median moves
+    #    meaningfully; the spread is preserved).
+    drift = _llm_drift_target(last_close, levels)
+    if drift is not None:
+        sim_returns = sim_returns + drift
+
+    # 3. Path construction: P_t = P_0 · exp(Σ r_t).
+    cum_log = np.cumsum(sim_returns, axis=1)
+    sim_prices = last_close * np.exp(cum_log)  # shape (n_sims, horizon)
+
+    # 4. Per-day percentiles for each scenario + bands.
+    paths: dict[str, dict[str, Any]] = {}
+    for scenario, (p_lo, p_mid, p_hi) in _SCENARIO_PERCENTILES.items():
+        path_mid = np.percentile(sim_prices, p_mid, axis=0)
+        path_lo = np.percentile(sim_prices, p_lo, axis=0)
+        path_hi = np.percentile(sim_prices, p_hi, axis=0)
+        # Day-0 anchor is today's close for all three paths.
         paths[scenario] = {
-            "color": color,
-            "anchors": anchors,
-            "days": list(range(max_day + 1)),
-            "path": path,
-            "lower": lower,
-            "upper": upper,
+            "color": _SCENARIO_COLORS[scenario],
+            "percentile": p_mid,
+            "days": list(range(horizon + 1)),
+            "path": np.concatenate([[last_close], path_mid]),
+            "lower": np.concatenate([[last_close], path_lo]),
+            "upper": np.concatenate([[last_close], path_hi]),
         }
-
-    if not paths:
-        return None
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Daily CSV ----------------------------------------------------------
+    # ---- CSV -----------------------------------------------------------
     base_date = datetime.strptime(analysis_date, "%Y-%m-%d")
-    max_day = max(max(p["days"]) for p in paths.values())
     rows = []
-    for d in range(max_day + 1):
+    for d in range(horizon + 1):
         row: dict[str, Any] = {
             "day": d,
             "date": (base_date + timedelta(days=d)).strftime("%Y-%m-%d"),
         }
         for scenario, data in paths.items():
-            if d <= max(data["days"]):
-                row[scenario] = round(float(data["path"][d]), 4)
-                row[f"{scenario}_low"] = round(float(data["lower"][d]), 4)
-                row[f"{scenario}_high"] = round(float(data["upper"][d]), 4)
+            row[scenario] = round(float(data["path"][d]), 4)
+            row[f"{scenario}_low"] = round(float(data["lower"][d]), 4)
+            row[f"{scenario}_high"] = round(float(data["upper"][d]), 4)
         rows.append(row)
     csv_path = output_dir / "forecast.csv"
     pd.DataFrame(rows).to_csv(csv_path, index=False)
 
-    # Chart --------------------------------------------------------------
+    # ---- Chart ---------------------------------------------------------
     png_path: Optional[Path] = None
     try:
         import matplotlib
@@ -269,19 +337,16 @@ def generate_three_flavor_forecast(
                 data["days"],
                 data["path"],
                 color=data["color"],
-                label=scenario.capitalize(),
+                label=f"{scenario.capitalize()} (P{int(data['percentile'])})",
                 linewidth=2,
             )
             ax.fill_between(
                 data["days"],
                 data["lower"],
                 data["upper"],
-                alpha=0.12,
+                alpha=0.13,
                 color=data["color"],
             )
-            for d, v in data["anchors"]:
-                ax.scatter([d], [v], color=data["color"], s=36, zorder=5, edgecolors="white")
-
         ax.axhline(
             last_close,
             color="black",
@@ -291,8 +356,11 @@ def generate_three_flavor_forecast(
         )
         ax.set_xlabel("Days from analysis")
         ax.set_ylabel("Price")
+        algo_label = "GJR-GARCH(1,1)-t" if use_leverage else "GARCH(1,1)-t"
+        if method != "garch_t":
+            algo_label = "Historical-vol-t (GARCH unavailable)"
         ax.set_title(
-            f"{ticker} — three-flavor forecast (anchored at +30/+60/+90d, ±1σ bands)"
+            f"{ticker} — {algo_label} Monte Carlo, {n_sims} paths, percentile bands"
         )
         ax.legend(loc="best")
         ax.grid(alpha=0.3)
@@ -304,16 +372,26 @@ def generate_three_flavor_forecast(
     except Exception as exc:
         logger.warning("forecast: chart generation failed: %s", exc)
 
+    # 5. Probability of finishing below today's close — convenient summary
+    #    that the prior fixed-envelope model couldn't express.
+    prob_below_today = float(np.mean(sim_prices[:, -1] < last_close))
+
     return {
         "csv_path": csv_path,
         "png_path": png_path,
+        "method": method,
+        "leverage": use_leverage,
+        "n_sims": n_sims,
+        "horizon": horizon,
         "last_close": last_close,
-        "daily_sigma": daily_sigma,
-        "annualized_vol_pct": daily_sigma * float(np.sqrt(252)) * 100.0,
+        "daily_sigma": realized_daily_sigma,
+        "annualized_vol_pct": realized_daily_sigma * float(np.sqrt(252)) * 100.0,
+        "drift_applied": drift is not None,
+        "prob_below_today_at_horizon": prob_below_today,
         "scenarios": {
             scenario: {
-                "anchors": data["anchors"],
-                "max_day": max(data["days"]),
+                "percentile": data["percentile"],
+                "max_day": horizon,
                 "expected_at_max_day": float(data["path"][-1]),
                 "lower_at_max_day": float(data["lower"][-1]),
                 "upper_at_max_day": float(data["upper"][-1]),
@@ -327,29 +405,37 @@ def render_forecast_section(meta: Optional[Mapping[str, Any]], ticker: str) -> s
     """Compact markdown summary of the forecast for ``complete_report.md``."""
     if not meta:
         return ""
+    method_label = {
+        "garch_t": "GJR-GARCH(1,1)-t" if meta.get("leverage") else "GARCH(1,1)-t",
+        "historical_vol_t": "Historical-vol Student-t (GARCH unavailable)",
+    }.get(meta.get("method", "garch_t"), "GARCH(1,1)-t")
+
     sections = ["## VII. Forecast Curves"]
     sections.append(
         f"Today's close: **{meta['last_close']:.2f}** · "
         f"Realized annualized vol: **{meta['annualized_vol_pct']:.1f}%** · "
-        f"Bands shown are ±1σ widening with √t."
+        f"Method: **{method_label}** ({meta.get('n_sims', 0)} Monte Carlo paths) · "
+        f"P(below today at +{meta.get('horizon', 90)}d): **{meta['prob_below_today_at_horizon'] * 100:.0f}%**"
     )
     sections.append(
-        "_**Same** = LLM's `expected` (central view) when it's within "
-        "±50% of today's close, else flat at today (LLM may have stale "
-        "training-data prices). **Headwinds** and **Tailwinds** are "
-        "vol-driven scenarios — `today × exp(±k·σ·√t)` — anchored in "
-        "the stock's own realized volatility, not the LLM's view. So "
-        "even on a unanimously bullish call, headwinds reflects what "
-        "the market's actual volatility says is plausible downside._"
+        "_**Scenarios are percentile paths** of the simulated distribution: "
+        "Headwinds = P10 (10% chance of being worse), Same = P50 (median), "
+        "Tailwinds = P90 (10% chance of being better). Bands show the inner-"
+        "percentile uncertainty around each scenario — e.g. the bear-case "
+        "low is the 2.5th-percentile path. See `/references` in the webapp "
+        "for the GARCH/MC papers behind this approach._"
     )
     if meta.get("png_path"):
         sections.append(f"![{ticker} forecast](forecast.png)")
     sections.append("")
-    sections.append("| Scenario | +30d / +60d / +90d |")
-    sections.append("|---|---|")
+    sections.append("| Scenario | Percentile | +90d price | +90d band |")
+    sections.append("|---|---|---|---|")
     for scenario, info in meta["scenarios"].items():
-        anchors_str = " / ".join(f"{v:.0f}" for _, v in info["anchors"])
-        sections.append(f"| {scenario.capitalize()} | {anchors_str} |")
+        sections.append(
+            f"| {scenario.capitalize()} | P{int(info['percentile'])} | "
+            f"{info['expected_at_max_day']:.2f} | "
+            f"{info['lower_at_max_day']:.2f} – {info['upper_at_max_day']:.2f} |"
+        )
     sections.append("")
     sections.append("Daily resolution path lives in `forecast.csv`.")
     return "\n".join(sections)

@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+{% block title %}Algorithms & References · TradingAgents{% endblock %}
+{% block body %}
+
+<header class="hero">
+  <h1>Algorithms &amp; references</h1>
+  <p class="muted">
+    What models this repo uses, why they were chosen, and the papers behind them.
+  </p>
+</header>
+
+<section class="reference-section">
+  <h2>1 · Stock-price forecasting (GARCH(1,1)-t Monte Carlo)</h2>
+  <p>
+    Each run produces three forward-looking price paths — <strong>headwinds</strong>,
+    <strong>same</strong>, and <strong>tailwinds</strong> — which are now the 10th,
+    50th, and 90th percentiles of a 5,000-path Monte Carlo simulation driven by a
+    fitted GARCH(1,1) with Student-t innovations. Inner-percentile windows form the
+    uncertainty bands (e.g. headwinds <code>low</code> = P2.5, headwinds <code>high</code> = P25).
+  </p>
+
+  <details open class="ref-card">
+    <summary><strong>Why GARCH and not a constant-σ envelope?</strong></summary>
+    <p>
+      The previous model assumed today's realized volatility was fixed for the next 90
+      days and wrapped a deterministic
+      <code>today × exp(±k·σ·√t)</code> envelope around it. The single most robust
+      stylized fact about equity returns is that <em>volatility clusters</em> — quiet
+      periods follow quiet periods, shocks follow shocks (Cont, 2001). GARCH directly
+      models that clustering, which means the bear case after a shock is wider than
+      the bear case in calm regimes, and the model knows it.
+    </p>
+    <p>
+      Student-t innovations (Bollerslev, 1987) give the bear path realistic fat tails
+      that a Gaussian model under-represents. Optional GJR-GARCH (Glosten, Jagannathan
+      &amp; Runkle, 1993) layered behind the <code>GARCH_LEVERAGE=1</code> env switch
+      captures the leverage effect — equities drop faster than they recover.
+    </p>
+  </details>
+
+  <details class="ref-card">
+    <summary><strong>Pipeline</strong></summary>
+    <ol>
+      <li>Fetch ~1y of daily OHLCV from yfinance.</li>
+      <li>Fit GARCH(1,1)-t on log returns scaled to percent (Sheppard's
+          <a href="https://github.com/bashtage/arch" target="_blank" rel="noopener">arch</a>
+          package).</li>
+      <li>Forecast 90 days of conditional variance via Monte Carlo simulation
+          (<code>method='simulation', simulations=5000</code>).</li>
+      <li>Optional drift adjustment: when the Portfolio Manager's
+          <code>expected</code> at +90d is within ±50% of today's close, shift the
+          simulated returns by a constant <em>δ</em> so the median path tracks the
+          LLM's central view (preserves the prior "same = LLM-anchored" behaviour).</li>
+      <li>Compute per-day percentiles and emit <code>forecast.csv</code> +
+          <code>forecast.png</code>.</li>
+    </ol>
+  </details>
+
+  <h3>References</h3>
+  <ol class="bibliography">
+    <li>
+      <strong>Bollerslev, T. (1986).</strong>
+      <em>Generalized Autoregressive Conditional Heteroskedasticity</em>.
+      Journal of Econometrics, 31(3), 307–327.
+      <a href="https://doi.org/10.1016/0304-4076(86)90063-1" target="_blank" rel="noopener">DOI</a>
+      &nbsp;<span class="muted small">— the original GARCH paper.</span>
+    </li>
+    <li>
+      <strong>Engle, R. F. (1982).</strong>
+      <em>Autoregressive Conditional Heteroscedasticity with Estimates of the Variance of United Kingdom Inflation</em>.
+      Econometrica, 50(4), 987–1007.
+      <a href="https://doi.org/10.2307/1912773" target="_blank" rel="noopener">DOI</a>
+      &nbsp;<span class="muted small">— ARCH, Engle's Nobel-cited foundation paper.</span>
+    </li>
+    <li>
+      <strong>Bollerslev, T. (1987).</strong>
+      <em>A Conditionally Heteroskedastic Time Series Model for Speculative Prices and Rates of Return</em>.
+      Review of Economics and Statistics, 69(3), 542–547.
+      <a href="https://doi.org/10.2307/1925546" target="_blank" rel="noopener">DOI</a>
+      &nbsp;<span class="muted small">— GARCH with Student-t innovations.</span>
+    </li>
+    <li>
+      <strong>Glosten, L. R., Jagannathan, R., &amp; Runkle, D. E. (1993).</strong>
+      <em>On the Relation between the Expected Value and the Volatility of the Nominal Excess Return on Stocks</em>.
+      Journal of Finance, 48(5), 1779–1801.
+      <a href="https://doi.org/10.1111/j.1540-6261.1993.tb05128.x" target="_blank" rel="noopener">DOI</a>
+      &nbsp;<span class="muted small">— GJR-GARCH (leverage-effect / asymmetric vol).</span>
+    </li>
+    <li>
+      <strong>Cont, R. (2001).</strong>
+      <em>Empirical Properties of Asset Returns: Stylized Facts and Statistical Issues</em>.
+      Quantitative Finance, 1(2), 223–236.
+      <a href="https://doi.org/10.1080/713665670" target="_blank" rel="noopener">DOI</a>
+      &nbsp;<span class="muted small">— the canonical "stylized facts" reference; justifies why volatility clustering is the right thing to model.</span>
+    </li>
+    <li>
+      <strong>Andersen, T. G., Bollerslev, T., Diebold, F. X., &amp; Labys, P. (2001).</strong>
+      <em>The Distribution of Realized Exchange Rate Volatility</em>.
+      Journal of the American Statistical Association, 96(453), 42–55.
+      <a href="https://www.jstor.org/stable/2670346" target="_blank" rel="noopener">JSTOR</a>
+      &nbsp;<span class="muted small">— foundational realized-volatility paper, the basis for the σ estimate that anchors the model.</span>
+    </li>
+  </ol>
+
+  <h3>Approaches considered and not adopted</h3>
+  <ul class="alt-list">
+    <li>
+      <strong>Heston stochastic-volatility model</strong>
+      (<a href="https://doi.org/10.1093/rfs/6.2.327" target="_blank" rel="noopener">Heston 1993</a>):
+      well-cited and richer than GARCH, but its calibration is finicky on a single ticker
+      and at 90-day horizons the marginal accuracy is small relative to the implementation cost.
+    </li>
+    <li>
+      <strong>N-BEATS</strong>
+      (<a href="https://arxiv.org/abs/1905.10437" target="_blank" rel="noopener">Oreshkin et al. 2019</a>),
+      <strong>N-HiTS</strong>
+      (<a href="https://arxiv.org/abs/2201.12886" target="_blank" rel="noopener">Challu et al. 2022</a>),
+      <strong>PatchTST</strong>
+      (<a href="https://arxiv.org/abs/2211.14730" target="_blank" rel="noopener">Nie et al. 2022</a>):
+      strong on M3/M4 benchmarks, but training on a single ticker overfits and CPU-only
+      inference is sluggish. Pretrained foundation models like
+      <strong>TimesFM</strong> (<a href="https://arxiv.org/abs/2310.10688" target="_blank" rel="noopener">Das et al. 2023</a>)
+      and <strong>Chronos</strong> (<a href="https://arxiv.org/abs/2403.07815" target="_blank" rel="noopener">Ansari et al. 2024</a>)
+      are interesting next-step candidates but pull in 200MB+ checkpoints and a much
+      larger dependency tree — disproportionate for replacing an envelope formula.
+    </li>
+    <li>
+      <strong>Bai &amp; Perron structural-change tests</strong>
+      (<a href="https://doi.org/10.1002/jae.659" target="_blank" rel="noopener">Bai &amp; Perron 2003</a>):
+      excellent for regime detection but doesn't directly produce a forward path
+      distribution.
+    </li>
+  </ul>
+</section>
+
+<section class="reference-section">
+  <h2>2 · Multi-agent debate framework</h2>
+  <p>
+    The agent topology (analysts → researchers → trader → risk debators → portfolio
+    manager) is built on
+    <a href="https://github.com/langchain-ai/langgraph" target="_blank" rel="noopener">LangGraph</a>,
+    with a per-ticker SQLite checkpointer for crash-resume. The debate / role-play
+    pattern is informed by the broader literature on LLM multi-agent systems:
+  </p>
+  <ol class="bibliography">
+    <li>
+      <strong>Du, Y., Li, S., Torralba, A., Tenenbaum, J. B., &amp; Mordatch, I. (2023).</strong>
+      <em>Improving Factuality and Reasoning in Language Models through Multiagent Debate</em>.
+      <a href="https://arxiv.org/abs/2305.14325" target="_blank" rel="noopener">arXiv:2305.14325</a>.
+      <span class="muted small">— evidence that adversarial multi-agent debate (the
+      bull/bear, plus the risk debators) improves factual reasoning over single-agent prompting.</span>
+    </li>
+    <li>
+      <strong>Hong, S., et al. (2023).</strong>
+      <em>MetaGPT: Meta Programming for a Multi-Agent Collaborative Framework</em>.
+      <a href="https://arxiv.org/abs/2308.00352" target="_blank" rel="noopener">arXiv:2308.00352</a>.
+      <span class="muted small">— role-specialized agents with hand-off contracts, mirrored by this repo's
+      analyst → researcher → trader → manager flow.</span>
+    </li>
+    <li>
+      <strong>Wu, Q., et al. (2023).</strong>
+      <em>AutoGen: Enabling Next-Gen LLM Applications via Multi-Agent Conversation</em>.
+      <a href="https://arxiv.org/abs/2308.08155" target="_blank" rel="noopener">arXiv:2308.08155</a>.
+      <span class="muted small">— general framework for tool-using LLM agents in conversation.</span>
+    </li>
+  </ol>
+</section>
+
+<section class="reference-section">
+  <h2>3 · Per-ticker scenario factor probabilities</h2>
+  <p>
+    After the run completes, a single structured-output call synthesises a
+    <code>ScenarioBreakdown</code> — 3-6 ticker-specific factors per scenario, each
+    tagged with an independent probability and an impact bucket. The schema enforces
+    "concrete and specific" in the field descriptions; the structured-output
+    mechanism prevents the model from skipping fields or returning prose.
+  </p>
+  <ol class="bibliography">
+    <li>
+      <strong>Tversky, A., &amp; Kahneman, D. (1974).</strong>
+      <em>Judgment under Uncertainty: Heuristics and Biases</em>. Science, 185(4157), 1124–1131.
+      <a href="https://doi.org/10.1126/science.185.4157.1124" target="_blank" rel="noopener">DOI</a>.
+      <span class="muted small">— the canonical reference on subjective-probability
+      elicitation; treating LLM-emitted percentages as judgmental probabilities follows
+      this tradition. Each factor's probability is independent (no implicit Σ=100).</span>
+    </li>
+    <li>
+      <strong>Tetlock, P. E. (2005).</strong>
+      <em>Expert Political Judgment: How Good Is It? How Can We Know?</em>. Princeton University Press.
+      <span class="muted small">— motivates the explicit-probability format over vague
+      "likely / probably" language, which is the convention the scenario card UI follows.</span>
+    </li>
+  </ol>
+</section>
+
+<section class="reference-section">
+  <h2>4 · Peer-comparable valuation</h2>
+  <p>
+    The Bull and Bear researchers receive a real <em>peer PE / Forward PE</em> table
+    pulled live from yfinance (see <code>tradingagents/dataflows/peers.py</code>). This
+    grounds their relative-valuation arguments in current numbers rather than the LLM's
+    training-data recall.
+  </p>
+  <ol class="bibliography">
+    <li>
+      <strong>Liu, J., Nissim, D., &amp; Thomas, J. (2002).</strong>
+      <em>Equity Valuation Using Multiples</em>. Journal of Accounting Research, 40(1), 135–172.
+      <a href="https://doi.org/10.1111/1475-679X.00042" target="_blank" rel="noopener">DOI</a>.
+      <span class="muted small">— evidence that forward-earnings multiples beat
+      trailing-earnings multiples for cross-sectional valuation.</span>
+    </li>
+  </ol>
+</section>
+
+{% endblock %}

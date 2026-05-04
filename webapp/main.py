@@ -99,32 +99,94 @@ def home(request: Request):
 # ---------- Run a new analysis -----------------------------------------------
 
 
+_ANALYSTS = [
+    ("market", "Market Analyst", "Technicals, price action, indicators"),
+    ("social", "Social Analyst", "Reddit / X / sentiment"),
+    ("news", "News Analyst", "Headlines, catalysts, macro"),
+    ("fundamentals", "Fundamentals Analyst", "Financial statements, ratios, peers"),
+]
+
+
+def _form_defaults() -> dict:
+    """Resolve the defaults shown in the run form from DEFAULT_CONFIG + env."""
+    from tradingagents.default_config import DEFAULT_CONFIG
+    from tradingagents.llm_clients.model_catalog import MODEL_OPTIONS
+
+    provider_default = (
+        os.environ.get("TRADINGAGENTS_LLM_PROVIDER")
+        or DEFAULT_CONFIG.get("llm_provider", "groq")
+    ).lower()
+
+    # Per-provider model lists for the dropdowns. Keep providers that have
+    # a static catalog; the others (openrouter / azure) are usable from
+    # the CLI but require dynamic lookups, out of scope for the form.
+    providers = {
+        name: {
+            "deep": [{"label": label, "value": value} for label, value in modes["deep"]],
+            "quick": [{"label": label, "value": value} for label, value in modes["quick"]],
+        }
+        for name, modes in MODEL_OPTIONS.items()
+    }
+
+    return {
+        "personas": list_personas(),
+        "default_persona": os.environ.get("TRADINGAGENTS_PERSONA", ""),
+        "default_ticker": os.environ.get("TRADINGAGENTS_DEFAULT_TICKER", "TWLO"),
+        "default_date": os.environ.get("TRADINGAGENTS_TRADE_DATE", "2026-05-03"),
+        "analysts": _ANALYSTS,
+        "default_analysts": ["market", "social", "news", "fundamentals"],
+        "providers": providers,
+        "default_provider": provider_default,
+        "default_deep_llm": DEFAULT_CONFIG["deep_think_llm"],
+        "default_quick_llm": DEFAULT_CONFIG["quick_think_llm"],
+        "default_max_debate_rounds": DEFAULT_CONFIG["max_debate_rounds"],
+        "default_max_risk_rounds": DEFAULT_CONFIG["max_risk_discuss_rounds"],
+        "default_output_language": DEFAULT_CONFIG.get("output_language", "English"),
+        "data_vendors": DEFAULT_CONFIG.get("data_vendors", {}),
+        "checkpoint_default": bool(DEFAULT_CONFIG.get("checkpoint_enabled", False)),
+    }
+
+
 @app.get("/run", response_class=HTMLResponse)
 def run_form(request: Request):
-    return TEMPLATES.TemplateResponse(
-        request,
-        "run_form.html",
-        {
-            "personas": list_personas(),
-            "default_persona": os.environ.get("TRADINGAGENTS_PERSONA", ""),
-            "default_ticker": os.environ.get("TRADINGAGENTS_DEFAULT_TICKER", "AMZN"),
-            "default_date": os.environ.get("TRADINGAGENTS_TRADE_DATE", "2026-05-03"),
-        },
-    )
+    return TEMPLATES.TemplateResponse(request, "run_form.html", _form_defaults())
 
 
 @app.post("/run")
-async def run_start(
-    ticker: str = Form(...),
-    trade_date: str = Form(...),
-    persona: str = Form(""),
-):
-    ticker = ticker.strip().upper()
-    trade_date = trade_date.strip()
-    persona = persona.strip()
+async def run_start(request: Request):
+    form = await request.form()
+
+    ticker = (form.get("ticker") or "").strip().upper()
+    trade_date = (form.get("trade_date") or "").strip()
     if not ticker or not trade_date:
         raise HTTPException(400, "ticker and trade_date are required")
-    run = await runs_mod.start_run(ticker, trade_date, persona)
+
+    valid_analysts = {"market", "social", "news", "fundamentals"}
+    selected = [a for a in form.getlist("analysts") if a in valid_analysts]
+    if not selected:
+        # An empty selection would produce a graph with zero analysts; fall
+        # back to the canonical four rather than failing.
+        selected = sorted(valid_analysts)
+
+    extra_env: dict[str, str] = {
+        "TRADINGAGENTS_ANALYSTS": ",".join(selected),
+    }
+    pairs = (
+        ("persona", "TRADINGAGENTS_PERSONA"),
+        ("llm_provider", "TRADINGAGENTS_LLM_PROVIDER"),
+        ("deep_llm", "TRADINGAGENTS_DEEP_LLM"),
+        ("quick_llm", "TRADINGAGENTS_QUICK_LLM"),
+        ("max_debate_rounds", "TRADINGAGENTS_MAX_DEBATE_ROUNDS"),
+        ("max_risk_rounds", "TRADINGAGENTS_MAX_RISK_ROUNDS"),
+        ("output_language", "TRADINGAGENTS_OUTPUT_LANGUAGE"),
+    )
+    for form_key, env_key in pairs:
+        v = (form.get(form_key) or "").strip()
+        if v:
+            extra_env[env_key] = v
+
+    persona = extra_env.get("TRADINGAGENTS_PERSONA", "")
+    run = await runs_mod.start_run(ticker, trade_date, persona, extra_env=extra_env)
     return RedirectResponse(f"/run/{run.run_id}", status_code=303)
 
 
@@ -464,6 +526,12 @@ def bundle_asset(bundle_name: str, rest: str):
 @app.get("/healthz", response_class=PlainTextResponse)
 def healthz():
     return "ok"
+
+
+@app.get("/references", response_class=HTMLResponse)
+def references(request: Request):
+    """Algorithm + bibliography page — what models drive this repo and why."""
+    return TEMPLATES.TemplateResponse(request, "references.html", {})
 
 
 @app.get("/storage/status", response_class=JSONResponse)

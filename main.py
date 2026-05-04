@@ -28,7 +28,7 @@ import os as _os
 
 # Defaults can be overridden via env so the webapp / cron jobs can drive
 # main.py without code edits.
-TICKER = _os.environ.get("TRADINGAGENTS_TICKER", "AMZN")
+TICKER = _os.environ.get("TRADINGAGENTS_TICKER", "TWLO")
 TRADE_DATE = _os.environ.get("TRADINGAGENTS_TRADE_DATE", "2026-05-03")
 
 # Initialize with custom config

@@ -65,8 +65,14 @@ async def start_run(
     persona: str = "",
     *,
     cwd: str = ".",
+    extra_env: Optional[dict[str, str]] = None,
 ) -> Run:
-    """Spawn the runner subprocess with the requested env and return the Run handle."""
+    """Spawn the runner subprocess with the requested env and return the Run handle.
+
+    ``extra_env`` lets the caller forward form-supplied overrides
+    (model selection, analyst list, debate rounds, ...) without the
+    runner having to know about every form field shape.
+    """
     run_id = secrets.token_hex(4)
 
     env = os.environ.copy()
@@ -74,6 +80,9 @@ async def start_run(
     env["TRADINGAGENTS_TRADE_DATE"] = trade_date
     if persona:
         env["TRADINGAGENTS_PERSONA"] = persona
+    if extra_env:
+        # Skip empty values so blanks don't clobber DEFAULT_CONFIG.
+        env.update({k: v for k, v in extra_env.items() if v})
     # PYTHONUNBUFFERED makes stdout flush immediately so the SSE stream
     # shows progress in real time rather than in a single dump at the end.
     env["PYTHONUNBUFFERED"] = "1"

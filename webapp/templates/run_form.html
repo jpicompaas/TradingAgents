@@ -2,25 +2,162 @@
 {% block title %}Run analysis · TradingAgents{% endblock %}
 {% block body %}
 <h1>Run a new analysis</h1>
-<form method="post" action="/run" class="form">
-  <label>
-    <span>Ticker</span>
-    <input type="text" name="ticker" required value="{{ default_ticker }}" autocomplete="off">
-  </label>
-  <label>
-    <span>Trade date</span>
-    <input type="date" name="trade_date" required value="{{ default_date }}">
-  </label>
-  <label>
-    <span>Investor persona <em class="muted">(optional)</em></span>
-    <select name="persona">
-      <option value="">— neutral —</option>
-      {% for p in personas %}
-        <option value="{{ p }}" {% if p == default_persona %}selected{% endif %}>{{ p }}</option>
+<p class="muted small">
+  Settings below default to the project-wide values from <code>DEFAULT_CONFIG</code>.
+  Anything you change here is forwarded to the runner via env vars for this run only.
+</p>
+
+<form method="post" action="/run" class="form run-form">
+
+  <fieldset class="form-section">
+    <legend>Target</legend>
+    <div class="form-grid two">
+      <label>
+        <span>Ticker</span>
+        <input type="text" name="ticker" required value="{{ default_ticker }}" autocomplete="off">
+      </label>
+      <label>
+        <span>Trade date</span>
+        <input type="date" name="trade_date" required value="{{ default_date }}">
+      </label>
+    </div>
+    <label>
+      <span>Investor persona <em class="muted">(optional)</em></span>
+      <select name="persona">
+        <option value="">— neutral —</option>
+        {% for p in personas %}
+          <option value="{{ p }}" {% if p == default_persona %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>Analysts <span class="muted small">(default: all four)</span></legend>
+    <div class="checkbox-grid">
+      {% for key, label, desc in analysts %}
+        <label class="checkbox">
+          <input type="checkbox" name="analysts" value="{{ key }}"
+                 {% if key in default_analysts %}checked{% endif %}>
+          <span>
+            <strong>{{ label }}</strong>
+            <span class="muted small">{{ desc }}</span>
+          </span>
+        </label>
       {% endfor %}
-    </select>
-  </label>
+    </div>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>Models</legend>
+    <div class="form-grid three">
+      <label>
+        <span>LLM provider <em class="muted">default: {{ default_provider }}</em></span>
+        <select name="llm_provider" id="llm_provider">
+          {% for p in providers.keys() %}
+            <option value="{{ p }}" {% if p == default_provider %}selected{% endif %}>{{ p }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Deep-thinking model
+          <em class="muted">default: <code>{{ default_deep_llm }}</code></em>
+        </span>
+        <select name="deep_llm" id="deep_llm"></select>
+      </label>
+      <label>
+        <span>Quick-thinking model
+          <em class="muted">default: <code>{{ default_quick_llm }}</code></em>
+        </span>
+        <select name="quick_llm" id="quick_llm"></select>
+      </label>
+    </div>
+    <p class="muted small">
+      Used by Research Manager &amp; Portfolio Manager (deep) and every other agent (quick).
+    </p>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>Debate &amp; risk rounds</legend>
+    <div class="form-grid two">
+      <label>
+        <span>Max debate rounds <em class="muted">default: {{ default_max_debate_rounds }}</em></span>
+        <input type="number" name="max_debate_rounds" min="1" max="5"
+               value="{{ default_max_debate_rounds }}">
+      </label>
+      <label>
+        <span>Max risk-discussion rounds <em class="muted">default: {{ default_max_risk_rounds }}</em></span>
+        <input type="number" name="max_risk_rounds" min="1" max="5"
+               value="{{ default_max_risk_rounds }}">
+      </label>
+    </div>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>Output</legend>
+    <label>
+      <span>Output language <em class="muted">default: {{ default_output_language }}</em></span>
+      <select name="output_language">
+        {% for lang in ["English", "Chinese", "Japanese", "Korean", "Spanish", "French", "German", "Portuguese"] %}
+          <option value="{{ lang }}" {% if lang == default_output_language %}selected{% endif %}>{{ lang }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </fieldset>
+
+  <fieldset class="form-section read-only">
+    <legend>Data vendors <span class="muted small">(pre-set defaults — change in <code>DEFAULT_CONFIG</code>)</span></legend>
+    <ul class="kv-list">
+      {% for category, vendor in data_vendors.items() %}
+        <li><span class="kv-k">{{ category }}</span><span class="kv-v"><code>{{ vendor }}</code></span></li>
+      {% endfor %}
+      <li><span class="kv-k">checkpoint_enabled</span><span class="kv-v"><code>{{ checkpoint_default }}</code></span></li>
+    </ul>
+  </fieldset>
+
   <button type="submit">Start analysis</button>
 </form>
-<p class="muted small">Defaults are read from <code>.env</code>; the analysis runs as a subprocess of this webapp container and writes its bundle to <code>trading-reports/</code>.</p>
+
+<script id="provider-models" type="application/json">{{ providers | tojson }}</script>
+<script>
+(function () {
+  const data = JSON.parse(document.getElementById("provider-models").textContent);
+  const providerEl = document.getElementById("llm_provider");
+  const deepEl = document.getElementById("deep_llm");
+  const quickEl = document.getElementById("quick_llm");
+  const defaults = {
+    provider: {{ default_provider | tojson }},
+    deep: {{ default_deep_llm | tojson }},
+    quick: {{ default_quick_llm | tojson }},
+  };
+
+  function fill(selectEl, options, preferredValue) {
+    selectEl.innerHTML = "";
+    let matched = false;
+    options.forEach((opt) => {
+      const o = document.createElement("option");
+      o.value = opt.value;
+      o.textContent = opt.label;
+      if (opt.value === preferredValue) {
+        o.selected = true;
+        matched = true;
+      }
+      selectEl.appendChild(o);
+    });
+    if (!matched && options.length) selectEl.selectedIndex = 0;
+  }
+
+  function refresh() {
+    const provider = providerEl.value;
+    const modes = data[provider] || { deep: [], quick: [] };
+    const useDefaults = provider === defaults.provider;
+    fill(deepEl, modes.deep, useDefaults ? defaults.deep : null);
+    fill(quickEl, modes.quick, useDefaults ? defaults.quick : null);
+  }
+
+  providerEl.addEventListener("change", refresh);
+  refresh();
+})();
+</script>
+
 {% endblock %}

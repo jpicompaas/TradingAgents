@@ -12,6 +12,7 @@
     <nav>
       <a href="/run" {% if request.url.path.startswith("/run") %}class="active"{% endif %}>Run analysis</a>
       <a href="/reports" {% if request.url.path.startswith("/reports") %}class="active"{% endif %}>Browse reports</a>
+      <a href="/references" {% if request.url.path.startswith("/references") %}class="active"{% endif %}>References</a>
     </nav>
   </header>
   <main class="container">

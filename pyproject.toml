@@ -25,6 +25,7 @@ dependencies = [
     "markdown>=3.6",
     "python-multipart>=0.0.9",
     "boto3>=1.35.0",
+    "arch>=7.0.0",
     "parsel>=1.10.0",
     "pytz>=2025.2",
     "questionary>=2.1.0",
